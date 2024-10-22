@@ -1,0 +1,132 @@
+---
+title: "Carbon Extraction"
+author: "Alarice Chetty"
+output: pdf_document
+---
+
+```{r setup, include=FALSE,echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(sf)
+library(ggplot2)
+library(stars)
+library(terra)
+library(sp)
+library(viridis)
+library(tidyterra)
+library(knitr)
+```
+
+```{r admin, echo=FALSE,include=FALSE}
+
+carbon_data = rast("ALS_AGBD_25m/LBC_ALS_AGBD_25m.tif") ##carbon data
+
+load("Lewa_Only.Rdata")                                 ##lewa boundary points
+lewa = st_as_sf(Lewa_only$geometry)                     ##lewa convert sf
+load("exclosure.Rdata")                                 ##named exc
+exclosure =  st_make_valid(exclosure)                   ##no idea but it works
+exclosure = exclosure[-c(45,1),]                             ##remove extension exclosure
+
+
+BACI_cam_points   = read.csv("LLBN_MES_camera_grid.csv")                      ##site MES data
+BACI_cam_points   = rename(BACI_cam_points,treatment=stratum)|>rename(station_name=seq_id)|>select(station_name,treatment,longitude,latitude) ##retrieving treatment
+BACI_cam_points$station_name = sub("","mes",BACI_cam_points$station_name)           ##format
+BACI_cam_points$treatment  = sub("extension","control",BACI_cam_points$treatment)   ##format
+BACI_cam_points$treatment  = sub("exclosure","exclusion",BACI_cam_points$treatment) ##format
+BACI_cam  = st_as_sf(BACI_cam_points,coords=c("longitude", "latitude"),crs=4326) 
+
+
+RBS_cam_points = read.csv("RBS_Acoustic_metadata_table.csv")[,c("station_name","treatment","longitude","latitude")] ##load RBS points
+RBS_cam_points$treatment = tolower(RBS_cam_points$treatment)    
+RBS_cam_points = RBS_cam_points[-which(RBS_cam_points$station_name == "RBS 30"),]  ##Remove "RBS 30"
+RBS_cam_points = filter(RBS_cam_points,longitude > 37.345) # filter for Lol - RBS data
+RBS_cam        = st_as_sf(RBS_cam_points,coords=c("longitude", "latitude"),crs=4326) 
+
+
+cam_points = rbind(BACI_cam,RBS_cam)                   ##combine all devices
+carbon_data = project(carbon_data, crs(lewa))          ##convert carbon crs
+
+```
+
+```{r lewa points,echo=FALSE,include=FALSE}
+##lewa grid
+grid_res      = 0.001 ##resolution
+grid          = st_make_grid(Lewa_only, cellsize = grid_res, what = "polygons") ##bounding box
+grid_sf       = st_sf(geometry = st_sfc(grid, crs = st_crs(Lewa_only))) ##crs
+grid_points   = st_centroid(grid_sf)                                    ##cell to points
+inside_points = st_intersects(grid_points, Lewa_only, sparse = FALSE)   ##Lewa points only
+points_in     = grid_points[inside_points, ]
+lewa_coord    = as.data.frame(st_coordinates(points_in)[,1:2])
+colnames(lewa_coord) = c("x","y")
+```
+
+```{r carbon extract Lewa,echo=FALSE,include=FALSE}
+##extract carbon values for Lewa area for visualisation
+carbon_lewa = extract(carbon_data,lewa_coord)                  ##extract carbon values
+carbon_lewa = cbind(carbon_lewa,lewa_coord)                         ##carbon values with coordinates
+carbon_lewa = na.omit(carbon_lewa)                                  ##remove nas 
+carbon_sp = st_as_sf(carbon_lewa,coords=c("x", "y"),crs=4326)  ##sf transfom 
+
+  
+```
+
+```{r exclosure site plot,echo=FALSE,include=TRUE,fig.cap="Lewa Map with exclosures and Audio sites",fig.align='center'}
+ggplot() +
+  geom_sf(data = lewa, fill = "lightgrey", color = "black") +  geom_sf(data = cam_points,
+          aes(fill = treatment),  
+          size = 0.8, 
+          shape = 23) +  
+  geom_sf(data = exclosure, 
+          fill = NA, 
+          color = "black",  
+          size = 0.5) + 
+  scale_fill_manual(values = c("control" = "red", 
+                                "exclusion" = "blue"),
+                               name = "Management Type") +  
+  xlab("Longitude") +
+  ylab("Latitude") +
+  coord_sf(xlim = c(min(37.35439),max(37.52874)), ylim = c(min(0.1426099),max(0.2954777)), expand = TRUE) +
+  theme_minimal()                      
+```
+
+```{r log carbon+1 plot,echo=FALSE,include=TRUE,fig.cap="Log(Carbon)+1 Values over Lewa with Audio sites",fig.align='center'}
+ggplot() +
+  geom_sf(data = lewa, fill = "white", color = "black") + 
+  geom_tile(data = carbon_lewa, aes(x = x, y = y, fill = log(LBC_ALS_AGBD_25m + 1))) +
+  scale_fill_gradientn(name = "Woody Biomass\n(Log-transformed Tonnes per ha)", colors = terrain.colors(10)) +
+  geom_sf(data = cam_points, 
+          aes(color = "Audio Moth Devices"), 
+          size = 1, 
+          shape = 16) + 
+  scale_color_manual(values = "black", name = "") + 
+  geom_sf(data = exclosure, 
+          fill = NA,  
+          color = "black", 
+          size = 0.5) +  
+  xlab("Longitude") +
+  ylab("Latitude") +
+  coord_sf(xlim = c(min(37.35439), max(37.52874)), 
+           ylim = c(min(0.1426099), max(0.2954777)), 
+           expand = TRUE) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 12),
+    axis.title.y = element_text(size = 12),
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 9)
+  )
+
+```
+
+```{r carbon extract site ,echo=TRUE,include=TRUE}
+
+cam_points_utm = st_transform(cam_points, crs = 32633)                         ##cam points to crs of buffer
+buffers = st_buffer(cam_points_utm, dist = 25)                                 ##buffered coordinates 
+extracted_values = extract(carbon_data, buffers, fun = mean, na.rm = TRUE)     ##extract carbon 
+carbon_extract = cbind(cam_points,round(log(extracted_values$LBC_ALS_AGBD_25m+1),4))
+carbon = as.data.frame(carbon_extract)#[,-4]
+carbon = rename(carbon,biomass = round.log.extracted_values.LBC_ALS_AGBD_25m...1...4. )
+#write.csv(carbon, file="carbon.csv")
+```
+
+

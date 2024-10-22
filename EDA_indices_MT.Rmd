@@ -1,0 +1,439 @@
+---
+title: "Data Exploration Indices and Management type"
+output: pdf_document
+date: "Alarice Chetty "
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+install.packages("GGally")
+library(GGally)
+install.packages("car")
+library(car)
+install.packages("ggcorrplot")
+library(ggcorrplot)
+library(dplyr)
+library(tidyr)
+```
+
+```{r admin,echo=FALSE}
+all_data     = read.csv("data_combined8.csv")     ##read data in
+evening_data = read.csv("data_evening8.csv")
+morning_data = read.csv("data_morning8.csv")
+peak_data    = read.csv("data_peak8.csv")
+
+all_data[,10:15]     = scale(all_data[,10:15])    ##scale data
+morning_data[,10:15] = scale(morning_data[,10:15])
+evening_data[,10:15] = scale(evening_data[,10:15])
+peak_data[,10:15]    = scale(peak_data[,10:15])
+
+indices=c("ACI","ADI","AEI","BIO","H","NDSI")
+
+```
+
+```{r absolute mean differences, include=TRUE, echo=FALSE} 
+all_diff = as.data.frame(rbind(                       ##mean of each index by treatment
+tapply(all_data$aci,all_data$treatment,mean),
+tapply(all_data$ad,all_data$treatment,mean),
+tapply(all_data$aei,all_data$treatment,mean),
+tapply(all_data$bi,all_data$treatment,mean),
+tapply(all_data$total_ent,all_data$treatment,mean),
+tapply(all_data$ndsi,all_data$treatment,mean)),6,2)
+
+
+evening_diff = as.data.frame(rbind(
+tapply(evening_data$aci,evening_data$treatment,mean),
+tapply(evening_data$ad,evening_data$treatment,mean),
+tapply(evening_data$aei,evening_data$treatment,mean),
+tapply(evening_data$bi,evening_data$treatment,mean),
+tapply(evening_data$total_ent,evening_data$treatment,mean),
+tapply(evening_data$ndsi,evening_data$treatment,mean)),6,2)
+
+morning_diff = as.data.frame(rbind(
+tapply(morning_data$aci,morning_data$treatment,mean),
+tapply(morning_data$ad,morning_data$treatment,mean),
+tapply(morning_data$aei,morning_data$treatment,mean),
+tapply(morning_data$bi,morning_data$treatment,mean),
+tapply(morning_data$total_ent,morning_data$treatment,mean),
+tapply(morning_data$ndsi,morning_data$treatment,mean)),6,2)
+
+peak_diff = as.data.frame(rbind(
+tapply(peak_data$aci,peak_data$treatment,mean),
+tapply(peak_data$ad,peak_data$treatment,mean),
+tapply(peak_data$aei,peak_data$treatment,mean),
+tapply(peak_data$bi,peak_data$treatment,mean),
+tapply(peak_data$total_ent,peak_data$treatment,mean),
+tapply(peak_data$ndsi,peak_data$treatment,mean)),6,2)
+
+all_diff$difference         = abs(all_diff$control - all_diff$exclusion)
+morning_diff$difference     = abs(morning_diff$control - morning_diff$exclusion)
+evening_diff$difference     = abs(evening_diff$control - evening_diff$exclusion)
+peak_diff$difference        = abs(peak_diff$control - peak_diff$exclusion)
+differences = as.data.frame(rbind(all_diff$difference,morning_diff$difference,evening_diff$difference,peak_diff$difference))
+rownames(differences) = c("All","Morning","Evening","Peak")
+colnames(differences) = indices
+
+#install.packages("tidyverse")
+library(tidyverse)
+differences$Data = c("All","Morning","Evening","Peak")
+
+
+data_long = differences |>                                                ##reshape data
+  pivot_longer(cols = -Data, names_to = "Variable", values_to = "MeanDifference")
+
+ggplot(data_long, aes(x = Variable, y = MeanDifference, fill = Data)) +   ##plot absolute mean differences
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "",
+       x = "Index",
+       y = "Absolute Mean Difference") +
+  theme_minimal() +
+  geom_hline(yintercept = 0.031, linetype = "dashed", color = "red", size = 0.4)  # Add the dashed line
+
+
+```
+
+```{r sd, include=TRUE, echo=FALSE} 
+##calculate se for each index of different management type
+calc_se <- function(x) {
+  se_value <- sd(x, na.rm = TRUE) / sqrt(length(na.omit(x)))
+  return( se = se_value)
+}                                                              ##se 
+
+all_se = as.data.frame(rbind(
+  tapply(all_data$aci, all_data$treatment, calc_se),
+  tapply(all_data$ad, all_data$treatment, calc_se),
+  tapply(all_data$aei, all_data$treatment, calc_se),
+  tapply(all_data$bi, all_data$treatment, calc_se),
+  tapply(all_data$total_ent, all_data$treatment, calc_se),
+  tapply(all_data$ndsi, all_data$treatment, calc_se)
+))
+
+evening_se = as.data.frame(rbind(
+  tapply(evening_data$aci, evening_data$treatment, calc_se),
+  tapply(evening_data$ad, evening_data$treatment, calc_se),
+  tapply(evening_data$aei, evening_data$treatment, calc_se),
+  tapply(evening_data$bi, evening_data$treatment, calc_se),
+  tapply(evening_data$total_ent, evening_data$treatment, calc_se),
+  tapply(evening_data$ndsi, evening_data$treatment, calc_se)
+))
+
+morning_se = as.data.frame(rbind(
+  tapply(morning_data$aci, morning_data$treatment, calc_se),
+  tapply(morning_data$ad, morning_data$treatment, calc_se),
+  tapply(morning_data$aei, morning_data$treatment, calc_se),
+  tapply(morning_data$bi, morning_data$treatment, calc_se),
+  tapply(morning_data$total_ent, morning_data$treatment, calc_se),
+  tapply(morning_data$ndsi, morning_data$treatment, calc_se)
+))
+
+peak_se = as.data.frame(rbind(
+  tapply(peak_data$aci, peak_data$treatment, calc_se),
+  tapply(peak_data$ad, peak_data$treatment, calc_se),
+  tapply(peak_data$aei, peak_data$treatment, calc_se),
+  tapply(peak_data$bi, peak_data$treatment, calc_se),
+  tapply(peak_data$total_ent, peak_data$treatment, calc_se),
+  tapply(peak_data$ndsi, peak_data$treatment, calc_se)
+))
+all_se$secalc         = abs(all_se$control + all_se$exclusion)              ##addition of se
+morning_se$secalc     = abs(morning_se$control + morning_se$exclusion)
+evening_se$secalc     = abs(evening_se$control + evening_se$exclusion)
+peak_se$secalc        = abs(peak_se$control + peak_se$exclusion)
+secalcs = as.data.frame(rbind(all_se$secalc,morning_se$secalc,evening_se$secalc,peak_se$secalc))
+rownames(secalcs) = c("All","Morning","Evening","Peak")
+colnames(secalcs) = indices
+
+kable(secalcs,caption = "Mean difference between treatment type for each ")
+
+
+#install.packages("tidyverse")
+library(tidyverse)
+secalcs$Data = c("All","Morning","Evening","Peak")
+
+
+data_long <- secalcs |>
+  pivot_longer(cols = -Data, names_to = "Variable", values_to = "SEadd")
+
+ggplot(data_long, aes(x = Variable, y = SEadd, fill = Data)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "",
+       x = "Index",
+       y = "Sum of Standard Errors") +
+  theme_minimal() 
+```
+
+
+```{r boxplot by treatment, include=TRUE, echo=FALSE, fig.cap="Boxplot for indices by treatment and model"}
+# ACI
+par(mfrow = c(1, 4), oma = c(1.1, 2, 1, 1))  # Set outer margins
+boxplot(aci ~ treatment, data = all_data, main = "All Times", xlab = "", ylab = "", las = 2)
+boxplot(aci ~ treatment, data = morning_data, main = "Morning", xlab = "", ylab = "", las = 2)
+boxplot(aci ~ treatment, data = evening_data, main = "Evening", xlab = "", ylab = "", las = 2)
+boxplot(aci ~ treatment, data = peak_data, main = "Peak", xlab = "", ylab = "", las = 2)
+mtext("Treatment", side = 1, outer = TRUE, line = 0)
+mtext("ACI", side = 2, outer = TRUE, line = 0)
+
+# ADI
+par(mfrow = c(1, 4), oma = c(1.1, 2, 1, 1))  # Set outer margins
+boxplot(ad ~ treatment, data = all_data, main = "All Times", xlab = "", ylab = "", las = 2)
+boxplot(ad ~ treatment, data = morning_data, main = "Morning", xlab = "", ylab = "", las = 2)
+boxplot(ad ~ treatment, data = evening_data, main = "Evening", xlab = "", ylab = "", las = 2)
+boxplot(ad ~ treatment, data = peak_data, main = "Peak", xlab = "", ylab = "", las = 2)
+mtext("Treatment", side = 1, outer = TRUE, line = 0)
+mtext("ADI", side = 2, outer = TRUE, line = 0)
+
+# AEI
+par(mfrow = c(1, 4), oma = c(1.1, 2, 1, 1))  # Set outer margins
+boxplot(aei ~ treatment, data = all_data, main = "All Times", xlab = "", ylab = "", las = 2)
+boxplot(aei ~ treatment, data = morning_data, main = "Morning", xlab = "", ylab = "", las = 2)
+boxplot(aei ~ treatment, data = evening_data, main = "Evening", xlab = "", ylab = "", las = 2)
+boxplot(aei ~ treatment, data = peak_data, main = "Peak", xlab = "", ylab = "", las = 2)
+mtext("Treatment", side = 1, outer = TRUE, line = 0)
+mtext("AEI", side = 2, outer = TRUE, line = 0)
+
+# BIO
+par(mfrow = c(1, 4), oma = c(1.1, 2, 1, 1))  # Set outer margins
+boxplot(bi ~ treatment, data = all_data, main = "All Times", xlab = "", ylab = "", las = 2)
+boxplot(bi ~ treatment, data = morning_data, main = "Morning", xlab = "", ylab = "", las = 2)
+boxplot(bi ~ treatment, data = evening_data, main = "Evening", xlab = "", ylab = "", las = 2)
+boxplot(bi ~ treatment, data = peak_data, main = "Peak", xlab = "", ylab = "", las = 2)
+mtext("Treatment", side = 1, outer = TRUE, line = 0)
+mtext("BIO", side = 2, outer = TRUE, line = 0)
+
+# Total Entropy
+par(mfrow = c(1, 4), oma = c(1.1, 2, 1, 1))  # Set outer margins
+boxplot(total_ent ~ treatment, data = all_data, main = "All Times", xlab = "", ylab = "", las = 2)
+boxplot(total_ent ~ treatment, data = morning_data, main = "Morning", xlab = "", ylab = "", las = 2)
+boxplot(total_ent ~ treatment, data = evening_data, main = "Evening", xlab = "", ylab = "", las = 2)
+boxplot(total_ent ~ treatment, data = peak_data, main = "Peak", xlab = "", ylab = "", las = 2)
+mtext("Treatment", side = 1, outer = TRUE, line = 0)
+mtext("Total Entropy", side = 2, outer = TRUE, line = 0)
+
+# NDSI
+par(mfrow = c(1, 4), oma = c(1.1, 2, 1, 1))  # oma sets outer margins
+boxplot(ndsi ~ treatment, data = all_data, main = "All Times", xlab = "", ylab = "",las=2)
+boxplot(ndsi ~ treatment, data = morning_data, main = "Morning", xlab = "", ylab = "",las=2)
+boxplot(ndsi ~ treatment, data = evening_data, main = "Evening", xlab = "", ylab = "",las=2)
+boxplot(ndsi ~ treatment, data = peak_data, main = "Peak", xlab = "", ylab = "",las=2)
+mtext("Management Type", side = 1, outer = TRUE, line = 0)
+mtext("NDSI", side = 2, outer = TRUE, line = 0)
+```
+
+```{r vif, include=TRUE, echo=FALSE}
+#install.packages("usdm")
+library(usdm)
+
+##vif for all datasets
+vif = as.data.frame(cbind(vif(all_data[,c("aci","ad","aei","bi","total_ent","ndsi")]),vif(morning_data[,c("aci","ad","aei","bi","total_ent","ndsi")])[,2],vif(evening_data[,c("aci","ad","aei","bi","total_ent","ndsi")])[,2],vif(peak_data[,c("aci","ad","aei","bi","total_ent","ndsi")])[,2]))
+vif = vif[,-1]
+colnames(vif) = c("All","Morning","Evening","Peak")
+vif$indices = indices
+vif_long <- vif |>
+  pivot_longer(cols = -indices, names_to = "Variable", values_to = "VIF")
+
+##plot of vif
+ggplot(vif_long, aes(x = indices, y = VIF, fill = Variable)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_segment(aes(x = -Inf, xend = Inf, y = 5, yend = 5), linetype = "dashed", color = "black") +  # Jagged line example
+  labs(title = "",
+       x = "Index",
+       y = "Variance Inflation Factor (VIF)") +
+  theme_minimal()
+
+
+##just testing different combinations for vif
+vif(all_data[,10:15])           ##all
+vif(all_data[,11:15])           ##remove H
+vif(all_data[,c(10:11,13:15)])  ##remove ADI
+vif(all_data[,c(10:12,14:15)])  ##remove AEi
+vif(all_data[,c(11:12,14:15)])   ##remove H and AEI
+vif(all_data[,c(11,13:15)])   ##remove H and ADI
+vif(all_data[,c(10:11,14:15)])   ##remove H and ADI
+
+
+
+vif(morning_data[,10:15])           ##all
+vif(morning_data[,11:15])           ##remove H
+vif(morning_data[,c(10:11,13:15)])  ##remove ADI
+vif(morning_data[,c(10:12,14:15)])  ##remove AEi
+vif(morning_data[,c(11:12,14:15)])   ##remove H and AEI
+vif(morning_data[,c(11,13:15)])   ##remove H and ADI
+vif(morning_data[,c(10:11,14:15)])   ##remove H and ADI
+
+
+
+vif(evening_data[,10:15])           ##all
+vif(evening_data[,11:15])           ##remove H
+vif(evening_data[,c(10:11,13:15)])  ##remove ADI
+vif(evening_data[,c(10:12,14:15)])  ##remove AEi
+vif(evening_data[,c(11:12,14:15)])   ##remove H and AEI
+vif(evening_data[,c(11,13:15)])   ##remove H and ADI
+vif(evening_data[,c(10:11,14:15)])   ##remove H and ADI
+
+
+vif(peak_data[,10:15])           ##all
+vif(peak_data[,11:15])           ##remove H
+vif(peak_data[,c(10:11,13:15)])  ##remove ADI
+vif(peak_data[,c(10:12,14:15)])  ##remove AEi
+vif(peak_data[,c(11:12,14:15)])   ##remove H and AEI
+vif(peak_data[,c(11,13:15)])   ##remove H and ADI
+vif(peak_data[,c(10:11,14:15)])   ##remove H and ADI
+
+
+
+
+```
+
+
+```{r pearson corr plot , include=TRUE, echo=FALSE, fig.cap = "Correlation between variables"}
+library(gridExtra)
+plot1 = ggcorrplot(cor(all_data[,10:15]), type='lower', hc.order = TRUE, lab=TRUE,lab_size=2.5, title="All Data Correlation")
+plot2 = ggcorrplot(cor(morning_data[,10:15]), type='lower', hc.order = TRUE, lab_size=2.5,lab=TRUE, title="Morning Data Correlation")
+plot3 = ggcorrplot(cor(evening_data[,10:15]), type='lower', hc.order = TRUE, lab=TRUE,lab_size=2.5, title="Evening Data Correlation")
+plot4 = ggcorrplot(cor(peak_data[,10:15]), type='lower', hc.order = TRUE, lab=TRUE,lab_size=2.5, title="Peak Data Correlation")
+grid.arrange(plot1, plot2, plot3, plot4, nrow = 2, ncol = 2)
+
+```
+
+
+```{r t tests}
+
+#install.packages("LmerTest")
+library(lmerTest)
+library(reshape)
+##reshape data first
+evening_data$dummy_var = 0
+evening_data = mutate(evening_data,time = sub("1899-12-31","",time))|>
+  mutate(datetime = as.POSIXct(paste(date, time), format="%Y-%m-%d %H:%M:%S"))
+shaped_even =  melt(evening_data,
+               id.vars=c("station_id", "treatment","datetime"),
+               measure.vars=c("dummy_var","aci", "ad", "aei", "ndsi","total_ent","bi"))
+
+
+all_data$dummy_var = 0
+all_data = mutate(all_data,time = sub("1899-12-31","",time))|>
+  mutate(datetime = as.POSIXct(paste(date, time), format="%Y-%m-%d %H:%M:%S"))
+shaped_all =  melt(all_data,
+               id.vars=c("station_id", "treatment","datetime"),
+               measure.vars=c("dummy_var","aci", "ad", "aei", "ndsi","total_ent","bi"))
+
+#use lmer 
+morning_data$dummy_var = 0
+morning_data = mutate(morning_data,time = sub("1899-12-31","",time))|>
+  mutate(datetime = as.POSIXct(paste(date, time), format="%Y-%m-%d %H:%M:%S"))
+shaped_morn =  melt(morning_data,
+               id.vars=c("station_id", "treatment","datetime"),
+               measure.vars=c("dummy_var","aci", "ad", "aei", "ndsi","total_ent","bi"))
+
+#use lmer 
+peak_data$dummy_var = 0
+peak_data = mutate(peak_data,time = sub("1899-12-31","",time))|>
+  mutate(datetime = as.POSIXct(paste(date, time), format="%Y-%m-%d %H:%M:%S"))
+shaped_peak =  melt(peak_data,
+               id.vars=c("station_id", "treatment","datetime"),
+               measure.vars=c("dummy_var","aci", "ad", "aei", "ndsi","total_ent","bi"))
+#use lmer 
+model_all = lmer(value ~ treatment*variable + (1|station_id) + (1|station_id:datetime), data = shaped_all) 
+#use lmer 
+model_morn = lmer(value ~ treatment*variable + (1|station_id) + (1|station_id:datetime), data = shaped_morn) 
+model_even = lmer(value ~ treatment*variable + (1|station_id) + (1|station_id:datetime), data = shaped_even) 
+model_peak = lmer(value ~ treatment*variable + (1|station_id) + (1|station_id:datetime), data = shaped_peak) 
+
+summary(model_all, ddf = "Satterthwaite")
+summary(model_morn, ddf = "Satterthwaite")
+summary(model_even, ddf = "Satterthwaite")
+summary(model_peak, ddf = "Satterthwaite")
+
+```
+
+
+```{r rmcorr plots}
+#install.packages("rmcorr")
+library(rmcorr)
+library(ggplot2)
+library(RColorBrewer)
+all_datarm = all_data
+colnames(all_datarm)[10:15] = c("H", "ACI", "ADI", "AEI", "BIO", "NDSI")
+variables = c("H", "ACI", "ADI", "AEI", "BIO", "NDSI")
+rmcorr_results = list()
+
+# Calculate repeated measures correlation
+for (i in 1:(length(variables) - 1)) {
+  for (j in (i + 1):length(variables)) {
+    var1 = all_datarm[[variables[i]]]
+    var2 = all_datarm[[variables[j]]]
+    
+    # Assuming station_id is a column in your dataframe
+    rmcorr_results[[paste(variables[i], "vs", variables[j])]] <- rmcorr(
+      station_id, var1, var2, dataset = all_datarm)
+  }
+}
+par(mfrow=c(5,3))
+# Plotting the results
+for (name in names(rmcorr_results)) {
+  var_names <- strsplit(name, " vs ")[[1]]
+  
+  p <- ggplot(all_datarm, aes_string(x = var_names[1], y = var_names[2])) +
+    geom_point(aes(color = "Observations")) +  
+    geom_smooth(method = "lm", linetype = "dashed", aes(color = "Trend Line")) +  
+    scale_color_manual(values = c("Observations" = "darksalmon", "Trend Line" = "black"), name = "Legend") +
+    labs(tag = paste('rmcorr =', round(rmcorr_results[[name]]$r, 2)))+
+    labs(x = var_names[1],y = var_names[2])+
+    theme(plot.tag.position = "bottom") +
+    theme(legend.position = "right") +
+    ggtitle(name)  
+  
+  print(p) 
+}
+
+```
+
+
+```{r rmcorr matrix}
+rmmat_all = rmcorr_mat(
+  participant = "station_id", 
+  variables = c("aci", "ad", "aei", "bi", "total_ent", "ndsi"), 
+  dataset = all_data, 
+  CI.level = 0.95         
+)$matrix
+rownames(rmmat_all)=indices
+colnames(rmmat_all)=indices
+
+rmmat_morn = rmcorr_mat(
+  participant = "station_id", # Column name for participant IDs
+  variables = c("aci", "ad", "aei", "bi", "total_ent", "ndsi"), # Variable names
+  dataset = morning_data, # Data frame
+  CI.level = 0.95         # Confidence interval level
+)$matrix
+rownames(rmmat_morn)=indices
+colnames(rmmat_morn)=indices
+
+rmmat_even = rmcorr_mat(
+  participant = "station_id", # Column name for participant IDs
+  variables = c("aci", "ad", "aei", "bi", "total_ent", "ndsi"), # Variable names
+  dataset = evening_data, # Data frame
+  CI.level = 0.95         # Confidence interval level
+)$matrix
+rownames(rmmat_even)=indices
+colnames(rmmat_even)=indices
+
+rmmat_peak = rmcorr_mat(
+  participant = "station_id", # Column name for participant IDs
+  variables = c("aci", "ad", "aei", "bi", "total_ent", "ndsi"), # Variable names
+  dataset = peak_data, # Data frame
+  CI.level = 0.95         # Confidence interval level
+)$matrix
+rownames(rmmat_peak)=indices
+colnames(rmmat_peak)=indices 
+
+
+
+library(gridExtra)
+plot1 = ggcorrplot(rmmat_all, type='lower', hc.order = TRUE, lab=TRUE,lab_size=2.5, title="All Data Correlation")
+plot2 = ggcorrplot(rmmat_morn, type='lower', hc.order = TRUE, lab_size=2.5,lab=TRUE, title="Morning Data Correlation")
+plot3 = ggcorrplot(rmmat_even, type='lower', hc.order = TRUE, lab=TRUE,lab_size=2.5, title="Evening Data Correlation")
+plot4 = ggcorrplot(rmmat_peak, type='lower', hc.order = TRUE, lab=TRUE,lab_size=2.5, title="Peak Data Correlation")
+grid.arrange(plot1, plot2, plot3, plot4, nrow = 2, ncol = 2)
+```
+
+

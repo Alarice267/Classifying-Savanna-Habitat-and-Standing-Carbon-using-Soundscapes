@@ -1,0 +1,562 @@
+---
+title: "Carbon"
+output: pdf_document
+date: "Alarice Chetty"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(randomForest)
+install.packages("GGally")
+library(GGally)
+library(geepack)
+
+```
+
+```{r admin}
+carbon_data = read.csv("carbon.csv")|>
+  na.omit()|>
+  select(biomass,station_name)|>
+  plyr::rename(c("station_name" = "site_id"))   
+
+  
+
+all_data     = read.csv("data_combined8.csv")
+evening_data = read.csv("data_evening8.csv")
+morning_data = read.csv("data_morning8.csv")
+peak_data    = read.csv("data_peak8.csv")
+
+carbon_ind_all  = merge(all_data,carbon_data, by = 'site_id')          ##merge carbon to indices
+carbon_ind_even = merge(evening_data,carbon_data, by = 'site_id')
+carbon_ind_morn = merge(morning_data,carbon_data, by = 'site_id')
+carbon_ind_peak = merge(peak_data,carbon_data, by = 'site_id')
+
+set.seed(2024)
+devices_all  = sample(unique(carbon_ind_all$station_id))               ##devices in each dataset 
+devices_morn = sample(unique(carbon_ind_morn$station_id))
+devices_even = sample(unique(carbon_ind_even$station_id))
+devices_peak = sample(unique(carbon_ind_peak$station_id))
+
+all_folds  = cut(1:length(devices_all), breaks = 5, labels = F)        ##folds in devices
+morn_folds = cut(1:length(devices_morn), breaks = 5, labels = F)  
+even_folds = cut(1:length(devices_even), breaks = 5, labels = F)  
+peak_folds = cut(1:length(devices_peak), breaks = 5, labels = F)  
+
+
+carbon_ind_all$station_id = as.factor(carbon_ind_all$station_id)       ##factor devices
+carbon_ind_morn$station_id = as.factor(carbon_ind_morn$station_id)
+carbon_ind_even$station_id = as.factor(carbon_ind_even$station_id)
+carbon_ind_peak$station_id = as.factor(carbon_ind_peak$station_id)
+
+```
+
+
+```{r biomass exploration}
+##distribution of carbon over devices and management type
+ggplot(carbon_ind_all, aes(x = reorder(station_id, biomass), y = biomass, fill = treatment)) +
+  geom_bar(stat = "identity", position = "dodge") + 
+  labs(
+       x = "Device name",
+       y = "Biomass(Log Transformed Tonnes per ha)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  scale_fill_discrete(name = "Management Type") 
+
+
+all_mean <- carbon_ind_all |>                  ##mean of each index
+  group_by(site_id)|>
+  summarise(
+    total_ent = mean(total_ent, na.rm = TRUE),
+    aci = mean(aci, na.rm = TRUE),
+    ad = mean(ad, na.rm = TRUE),
+    aei = mean(aei, na.rm = TRUE),
+    bi = mean(bi, na.rm = TRUE),
+    ndsi = mean(ndsi, na.rm = TRUE))|>
+    merge(y=carbon_data, by = "site_id")
+
+
+ggpairs(all_mean[,2:8])                       ##pearson correlation 
+
+
+summary(carbon_data$biomass)                  ##summary statistics
+sd(carbon_data$biomass)
+```
+
+
+
+##Random Forest models
+```{r rf all}
+all_var_imp = list()
+all_rf_MSE      = c()                                           ##MSE 
+all_rf_RE  = c()                                                ##RE
+all_stat    = list()                                            ##MSE per stations
+for (fld in 1:5){
+  train_devices = devices_all[all_folds != fld]                 ##training devices
+  train = filter(carbon_ind_all,station_id %in% train_devices)  ##training data                 
+  valid = filter(carbon_ind_all,!station_id %in% train_devices) ##validation data  
+  
+  tunedRF = tuneRF(x = train[, 10:15],                           ##Tune Random Forest
+                    y = train$biomass,
+                    mtryStart  = 3,
+                    ntreeTry   = 1000,
+                    stepFactor = 1)
+   
+  rand = randomForest(biomass ~ total_ent + aci + bi + ndsi, ##Fit Random Forest model
+                       data       = train, 
+                       importance = TRUE, 
+                       strata     = station_id,
+                       mtry       = tunedRF[1, 1],
+                       ntree      = 1000)
+
+  all_var_imp[[fld]] = randomForest::importance(rand, type = 1) ##variable importance
+
+  valid$pred = predict(rand, valid)                              ##predict
+  all_rf_MSE[fld]    =  mean((valid$pred - valid$biomass)^2)         ##MSE error
+  all_rf_RE[fld] = mean(abs(valid$pred - valid$biomass)/valid$biomass)##RE error
+  all_stat[[fld]] = na.omit(as.data.frame(tapply((valid$pred - valid$biomass)^2, valid$station_id, mean)))##MSE per device
+  print(paste0("Fold Completed:",fld))
+}
+
+mean(all_rf_MSE)                              ##mean and sd for errors
+sd(all_rf_MSE)
+mean(all_rf_RE)
+sd(all_rf_RE)
+
+all_mean_imp <- Reduce("+", all_var_imp) / length(all_var_imp) ##ave variable imp
+all_mean_imp <- all_mean_imp[order(all_mean_imp, decreasing = TRUE), ]
+barplot(all_mean_imp,                                          ##variable importance plot
+        horiz = TRUE,
+        col = 'navy',
+        las = 1,
+        xlab = 'Mean decrease in MSE',
+        names.arg = c("NDSI","BIO","ACI","H"),
+        main = "All Dataset")
+
+all_mp = do.call(rbind,all_stat)                              ##list to dataframe
+all_mp$site_id = row.names(all_mp)            
+all_mp = merge(all_mp,carbon_data, by = "site_id")            
+plot(all_mp$`tapply((valid$pred - valid$biomass)^2, valid$station_id, mean)`~all_mp$biomass, xlab = "Biomass",ylab = "MSE", main = "All Dataset")                                 ##plot MSE against biomass
+
+```
+
+```{r rf morning}
+morn_var_imp = list()
+morn_rf_MSE      = c()                                          ##MSE 
+morn_rf_RE  = c()                                               ##RE
+morn_stat    = list()                                           ##MSE per stations
+for (fld in 1:5){
+  train_devices = devices_morn[morn_folds != fld]               ##training devices
+  train = filter(carbon_ind_morn,station_id %in% train_devices) ##training data                  
+  valid = filter(carbon_ind_morn,!station_id %in% train_devices)##validation data
+  
+  tunedRF = tuneRF(x = train[, 10:15],                           ##Tune Random Forest
+                    y = train$biomass,
+                    mtryStart  = 3,
+                    ntreeTry   = 1000,
+                    stepFactor = 1)
+   
+  rand = randomForest(biomass ~ total_ent + aci + bi + ndsi, ##Fit Random Forest model
+                       data       = train, 
+                       importance = TRUE, 
+                       strata     = station_id,
+                       mtry       = tunedRF[1, 1],
+                       ntree      = 1000)
+
+  morn_var_imp[[fld]] = randomForest::importance(rand, type = 1) ##variable importance
+
+  valid$pred = predict(rand, valid)                              ##predict
+  morn_rf_MSE[fld]    =  mean((valid$pred - valid$biomass)^2)         ##MSE error
+  morn_rf_RE[fld] = mean(abs(valid$pred - valid$biomass)/valid$biomass)##RE error
+  morn_stat[[fld]] = na.omit(as.data.frame(tapply((valid$pred - valid$biomass)^2, valid$station_id, mean)))##MSE per device
+  print(paste0("Fold Completed:",fld))
+}
+
+mean(morn_rf_MSE)                              ##mean and sd for errors
+sd(morn_rf_MSE)
+mean(morn_rf_RE)
+sd(morn_rf_RE)
+
+morn_mean_imp <- Reduce("+", morn_var_imp) / length(morn_var_imp) ##ave variable imp
+morn_mean_imp <- morn_mean_imp[order(morn_mean_imp, decreasing = TRUE), ]
+barplot(morn_mean_imp,                                          ##variable importance plot
+        horiz = TRUE,
+        col = 'navy',
+        las = 1,
+        xlab = 'Mean decrease in MSE',
+        names.arg = c("H","ACI","BIO","NDSI"),
+        main = "Morning Dataset")
+
+morn_mp = do.call(rbind,morn_stat)                              ##list to dataframe
+morn_mp$site_id = row.names(morn_mp)            
+morn_mp = merge(morn_mp,carbon_data, by = "site_id")            
+plot(morn_mp$`tapply((valid$pred - valid$biomass)^2, valid$station_id, mean)`~morn_mp$biomass, xlab = "Biomass",ylab = "MSE", main = "Morning Dataset")                                 ##plot MSE against biomass
+```
+
+```{r rf Evening}
+even_var_imp = list()
+even_rf_MSE      = c()                                          ##MSE 
+even_rf_RE  = c()                                               ##RE
+even_stat    = list()                                           ##MSE per stations
+for (fld in 1:5){
+  train_devices = devices_even[even_folds != fld]               ##training devices
+  train = filter(carbon_ind_even,station_id %in% train_devices) ##training data                    
+  valid = filter(carbon_ind_even,!station_id %in% train_devices)##validation data
+  
+  tunedRF = tuneRF(x = train[, 10:15],                           ##Tune Random Forest
+                    y = train$biomass,
+                    mtryStart  = 3,
+                    ntreeTry   = 1000,
+                    stepFactor = 1)
+   
+  rand = randomForest(biomass ~ total_ent + aci + bi + ndsi, ##Fit Random Forest model
+                       data       = train, 
+                       importance = TRUE, 
+                       strata     = station_id,
+                       mtry       = tunedRF[1, 1],
+                       ntree      = 1000)
+
+  even_var_imp[[fld]] = randomForest::importance(rand, type = 1) ##variable importance
+
+  valid$pred = predict(rand, valid)                              ##predict
+  even_rf_MSE[fld]    =  mean((valid$pred - valid$biomass)^2)         ##MSE error
+  even_rf_RE[fld] = mean(abs(valid$pred - valid$biomass)/valid$biomass)##RE error
+  even_stat[[fld]] = na.omit(as.data.frame(tapply((valid$pred - valid$biomass)^2, valid$station_id, mean)))##MSE per device
+  print(paste0("Fold Completed:",fld))
+}
+
+mean(even_rf_MSE)                              ##mean and sd for errors
+sd(even_rf_MSE)
+mean(even_rf_RE)
+sd(even_rf_RE)
+
+even_mean_imp <- Reduce("+", even_var_imp) / length(even_var_imp) ##ave variable imp
+even_mean_imp <- even_mean_imp[order(even_mean_imp, decreasing = TRUE), ]
+barplot(even_mean_imp,                                          ##variable importance plot
+        horiz = TRUE,
+        col = 'navy',
+        las = 1,
+        xlab = 'Mean decrease in MSE',
+        names.arg = c("ACI","BIO","H","NDSI"),
+        main = "Evening Dataset")
+
+even_mp = do.call(rbind,even_stat)                              ##list to dataframe
+even_mp$site_id = row.names(even_mp)            
+even_mp = merge(even_mp,carbon_data, by = "site_id")            
+plot(even_mp$`tapply((valid$pred - valid$biomass)^2, valid$station_id, mean)`~even_mp$biomass, xlab = "Biomass",ylab = "MSE", main = "Evening Dataset")                                 ##plot MSE against biomass
+```
+
+```{r rf peak}
+peak_var_imp = list()
+peak_rf_MSE      = c()                                          ##MSE 
+peak_rf_RE  = c()                                               ##RE
+peak_stat    = list()                                           ##MSE per stations
+for (fld in 1:5){
+  train_devices = devices_peak[peak_folds != fld]               ##training devices
+  train = filter(carbon_ind_peak,station_id %in% train_devices) ##training data                    
+  valid = filter(carbon_ind_peak,!station_id %in% train_devices)##validation data
+  
+  tunedRF = tuneRF(x = train[, 10:15],                           ##Tune Random Forest
+                    y = train$biomass,
+                    mtryStart  = 3,
+                    ntreeTry   = 1000,
+                    stepFactor = 1)
+   
+  rand = randomForest(biomass ~ total_ent + aci + bi + ndsi, ##Fit Random Forest model
+                       data       = train, 
+                       importance = TRUE, 
+                       strata     = station_id,
+                       mtry       = tunedRF[1, 1],
+                       ntree      = 1000)
+
+  peak_var_imp[[fld]] = randomForest::importance(rand, type = 1) ##variable importance
+
+  valid$pred = predict(rand, valid)                              ##predict
+  peak_rf_MSE[fld]    =  mean((valid$pred - valid$biomass)^2)         ##MSE error
+  peak_rf_RE[fld] = mean(abs(valid$pred - valid$biomass)/valid$biomass)##RE error
+  peak_stat[[fld]] = na.omit(as.data.frame(tapply((valid$pred - valid$biomass)^2, valid$station_id, mean)))##MSE per device
+  print(paste0("Fold Completed:",fld))
+}
+
+mean(peak_rf_MSE)                              ##mean and sd for errors
+sd(peak_rf_MSE)
+mean(peak_rf_RE)
+sd(peak_rf_RE)
+
+peak_mean_imp <- Reduce("+", peak_var_imp) / length(peak_var_imp) ##ave variable imp
+peak_mean_imp <- peak_mean_imp[order(peak_mean_imp, decreasing = TRUE), ]
+barplot(peak_mean_imp,                                          ##variable importance plot
+        horiz = TRUE,
+        col = 'navy',
+        las = 1,
+        xlab = 'Mean decrease in MSE',
+        names.arg = c("BIO","ACI","NDSI","H"),
+        main = "Peak Dataset")
+
+peak_mp = do.call(rbind,peak_stat)                              ##list to dataframe
+peak_mp$site_id = row.names(peak_mp)            
+peak_mp = merge(peak_mp,carbon_data, by = "site_id")            
+plot(peak_mp$`tapply((valid$pred - valid$biomass)^2, valid$station_id, mean)`~peak_mp$biomass, xlab = "Biomass",ylab = "MSE", main = "Peak Dataset")                                 ##plot MSE against biomass
+```
+
+
+
+###############################################################################################################
+
+##gee models
+```{r gee all}
+
+all_gee_MSE      = c()                                              ##MSE 
+all_gee_RE  = c()                                                   ##RE
+all_stat_gee = list()                                               ##MSE per device
+for (fld in 1:5){
+  train_devices = devices_all[all_folds != fld]                     ##training devices
+  train = filter(carbon_ind_all,station_id %in% train_devices)      ##training data                  
+  valid = filter(carbon_ind_all,!station_id %in% train_devices)     ##validation data  
+  train[,10:15] = scale(train[,10:15])                              ##scale after split
+  valid[,10:15] = scale(valid[,10:15])
+  
+  gee_model = geeglm(biomass ~ total_ent + aci + bi + ndsi,         ##gee model
+                      id     = station_id,
+                      data   = train,
+                      family = gaussian(link = "identity"),
+                      corstr = "independence",
+                      scale.fix = TRUE)
+
+  valid$pred = predict(gee_model, valid)                            ##predict
+  
+  all_gee_MSE[fld]     = mean((valid$pred - valid$biomass)^2)          ##MSE
+  all_gee_RE[fld] = mean(abs(valid$pred - valid$biomass)/valid$biomass)##Relative error
+  
+  all_stat_gee[[fld]] = na.omit(as.data.frame(tapply((valid$pred - valid$biomass)^2, valid$station_id, mean)))##MSE per device
+
+  print(paste0("Fold",fld))
+}
+mean(all_gee_MSE)                           ##mean and sd of errors
+sd(all_gee_MSE)
+mean(all_gee_RE)
+sd(all_gee_RE)
+
+all_mp_gee = do.call(rbind,all_stat_gee)  
+all_mp_gee$site_id = row.names(all_mp_gee)
+all_mp_gee = merge(all_mp_gee,carbon_data, by = "site_id")
+plot(all_mp_gee$`tapply((valid$pred - valid$biomass)^2, valid$station_id, mean)`~all_mp_gee$biomass, xlab = "Biomass",ylab = "MSE", main = "All Dataset")               ##plot MSE against biomass
+
+```
+```{r gee morning}
+
+morn_gee_MSE      = c()                                             ##MSE 
+morn_gee_RE  = c()                                                  ##RE
+morn_stat_gee = list()                                              ##MSE per device
+for (fld in 1:5){
+  train_devices = devices_morn[morn_folds != fld]                   ##training devices
+  train = filter(carbon_ind_morn,station_id %in% train_devices)     #training data                  
+  valid = filter(carbon_ind_morn,!station_id %in% train_devices)    ##validation data  
+  train[,10:15] = scale(train[,10:15])                              ##scale after split
+  valid[,10:15] = scale(valid[,10:15])
+  
+  gee_model = geeglm(biomass ~ total_ent + aci + bi + ndsi,         ##gee model
+                      id     = station_id,
+                      data   = train,
+                      family = gaussian(link = "identity"),
+                      corstr = "independence",
+                      scale.fix = TRUE)
+
+  valid$pred = predict(gee_model, valid)                            ##predict
+  
+  morn_gee_MSE[fld]     = mean((valid$pred - valid$biomass)^2)          ##MSE
+  morn_gee_RE[fld] = mean(abs(valid$pred - valid$biomass)/valid$biomass)##Relative error
+  
+  morn_stat_gee[[fld]] = na.omit(as.data.frame(tapply((valid$pred - valid$biomass)^2, valid$station_id, mean)))##MSE per device
+
+  print(paste0("Fold",fld))
+}
+mean(morn_gee_MSE)                           ##mean and sd of errors
+sd(morn_gee_MSE)
+mean(morn_gee_RE)
+sd(morn_gee_RE)
+
+morn_mp_gee = do.call(rbind,morn_stat_gee)  
+morn_mp_gee$site_id = row.names(morn_mp_gee)
+morn_mp_gee = merge(morn_mp_gee,carbon_data, by = "site_id")
+plot(morn_mp_gee$`tapply((valid$pred - valid$biomass)^2, valid$station_id, mean)`~morn_mp_gee$biomass, xlab = "Biomass",ylab = "MSE", main = "Morning Dataset")               ##plot MSE against biomass
+
+```
+
+```{r gee evening}
+
+even_gee_MSE      = c()                                             ##MSE 
+even_gee_RE  = c()                                                  ##RE
+even_stat_gee = list()                                              ##MSE per device
+for (fld in 1:5){
+  train_devices = devices_even[even_folds != fld]                   ##training devices
+  train = filter(carbon_ind_even,station_id %in% train_devices)     ##training data                  
+  valid = filter(carbon_ind_even,!station_id %in% train_devices)    ##validation data  
+  train[,10:15] = scale(train[,10:15])                              ##scale after split
+  valid[,10:15] = scale(valid[,10:15])
+  
+  gee_model = geeglm(biomass ~ total_ent + aci + bi + ndsi,         ##gee model
+                      id     = station_id,
+                      data   = train,
+                      family = gaussian(link = "identity"),
+                      corstr = "independence",
+                      scale.fix = TRUE)
+
+  valid$pred = predict(gee_model, valid)                            ##predict
+  
+  even_gee_MSE[fld]     = mean((valid$pred - valid$biomass)^2)          ##MSE
+  even_gee_RE[fld] = mean(abs(valid$pred - valid$biomass)/valid$biomass)##Relative error
+  
+  even_stat_gee[[fld]] = na.omit(as.data.frame(tapply((valid$pred - valid$biomass)^2, valid$station_id, mean)))##MSE per device
+
+  print(paste0("Fold",fld))
+}
+mean(even_gee_MSE)                           ##mean and sd of errors
+sd(even_gee_MSE)
+mean(even_gee_RE)
+sd(even_gee_RE)
+
+even_mp_gee = do.call(rbind,even_stat_gee)  
+even_mp_gee$site_id = row.names(even_mp_gee)
+even_mp_gee = merge(even_mp_gee,carbon_data, by = "site_id")
+plot(even_mp_gee$`tapply((valid$pred - valid$biomass)^2, valid$station_id, mean)`~even_mp_gee$biomass, xlab = "Biomass",ylab = "MSE", main = "Evening Dataset")               ##plot MSE against biomass
+
+```
+
+```{r gee peak}
+peak_gee_MSE      = c()                                             ##MSE 
+peak_gee_RE  = c()                                                  ##RE
+peak_stat_gee = list()                                              ##MSE per device
+for (fld in 1:5){
+  train_devices = devices_peak[peak_folds != fld]                   ##training devices
+  train = filter(carbon_ind_peak,station_id %in% train_devices)     ##training data                  
+  valid = filter(carbon_ind_peak,!station_id %in% train_devices)    ##validation data  
+  train[,10:15] = scale(train[,10:15])                              ##scale after split
+  valid[,10:15] = scale(valid[,10:15])
+  
+  gee_model = geeglm(biomass ~ total_ent + aci + bi + ndsi,         ##gee model
+                      id     = station_id,
+                      data   = train,
+                      family = gaussian(link = "identity"),
+                      corstr = "independence",
+                      scale.fix = TRUE)
+
+  valid$pred = predict(gee_model, valid)                            ##predict
+  
+  peak_gee_MSE[fld]     = mean((valid$pred - valid$biomass)^2)               ##MSE
+  peak_gee_RE[fld] = mean(abs(valid$pred - valid$biomass)/valid$biomass)##Relative error
+  
+  peak_stat_gee[[fld]] = na.omit(as.data.frame(tapply((valid$pred - valid$biomass)^2, valid$station_id, mean)))##MSE per device
+
+  print(paste0("Fold",fld))
+}
+mean(peak_gee_MSE)                           ##mean and sd of errors
+sd(peak_gee_MSE)
+mean(peak_gee_RE)
+sd(peak_gee_RE)
+
+peak_mp_gee = do.call(rbind,peak_stat_gee)  
+peak_mp_gee$site_id = row.names(peak_mp_gee)
+peak_mp_gee = merge(peak_mp_gee,carbon_data, by = "site_id")
+plot(peak_mp_gee$`tapply((valid$pred - valid$biomass)^2, valid$station_id, mean)`~peak_mp_gee$biomass, xlab = "Biomass",ylab = "MSE", main = "Peak Dataset")               ##plot MSE against biomass
+
+```
+
+```{r full model coefficeients GEE }
+all_scaled =  carbon_ind_all
+all_scaled[,10:15] = scale(all_scaled[,10:15])               ##scale the data 
+all_model = geeglm(biomass ~ total_ent + aci + bi + ndsi,
+                      id     = station_id,
+                      data   = all_scaled,
+                      family = gaussian(link = "identity"),
+                      corstr ="exchangeable",
+                      scale.fix = TRUE)
+
+
+morn_scaled =  carbon_ind_morn
+morn_scaled[,10:15] = scale(morn_scaled[,10:15])
+morn_model = geeglm(biomass ~ total_ent + aci + bi + ndsi,
+                      id     = station_id,
+                      data   = morn_scaled,
+                      family = gaussian(link = "identity"),
+                      corstr ="independence",
+                      scale.fix = TRUE)
+
+even_scaled =  carbon_ind_even
+even_scaled[,10:15] = scale(even_scaled[,10:15])
+even_model = geeglm(biomass ~ total_ent + aci + bi + ndsi,
+                      id     = station_id,
+                      data   = even_scaled,
+                      family = gaussian(link = "identity"),
+                      corstr ="independence",
+                      scale.fix = TRUE)
+
+peak_scaled =  carbon_ind_peak
+peak_scaled[,10:15] = scale(peak_scaled[,10:15])
+peak_model = geeglm(biomass ~ total_ent + aci + bi + ndsi,
+                      id     = station_id,
+                      data   = peak_scaled,
+                      family = gaussian(link = "identity"),
+                      corstr ="independence",
+                      scale.fix = TRUE)
+summary(all_model)       ##summary
+summary(morn_model)
+summary(even_model)
+summary(peak_model)
+```
+
+#################################################################################################
+
+##glmm models
+```{r glmm}
+##note that did this not work
+even_glmm      = c()
+even_glmm_rel  = c()
+even_stat_glmm = list()
+for (fld in 1:5) {
+    train_devices = devices_even[even_folds != 1]             ##running GLMM for one fold
+    train = filter(carbon_ind_even, station_id %in% train_devices)                  
+    valid = filter(carbon_ind_even, !station_id %in% train_devices) 
+    
+    train[, 10:15] = scale(train[, 10:15])                    ##scale data
+    valid[, 10:15] = scale(valid[, 10:15])
+    
+     # Fit the generalized linear mixed model
+    glm4 = lmer(biomass ~ 1+ ndsi + aci + total_ent + bi + (1|station_id), ##GLMM
+                data=train)
+    
+
+    # Predict on the validation set
+    valid_pred = predict(glm4,valid,re.form=NA, type="response")
+    # Calculate MSE and relative error
+    even_glmm[fld]     = mean((valid_pred - valid$biomass)^2)               
+    even_glmm_rel[fld] = mean(abs(valid_pred - valid$biomass) / valid$biomass) 
+    
+    even_stat_glmm[[fld]] = valid %>%
+        group_by(site_id) %>%
+        summarise(MSE = mean((pred - biomass)^2))
+    
+    # Print the fold number
+    print(paste0("Fold ", fld))
+}
+
+mean(even_glmm)
+sd(even_glmm)
+mean(even_glmm_rel)
+sd(even_gee_rel)
+
+even_mp_glmm = do.call(rbind,even_stat_glmm)|>
+  merge(carbon_data, by = "site_id")
+plot(even_mp_glmm$MSE~even_mp_glmm$biomass, xlab = "Biomass",ylab = "MSE", main = "Even Dataset")
+summary(glm4)
+
+
+
+
+hist(valid_pred, xlab = "Biomass Prediction",main="")              ##histogram of predictions
+
+rab = ranef(glm4)                                                  ##random effects
+rab = do.call(rbind,rab)
+hist(rab$`(Intercept)`, main="", xlab = "Random Effect")
+```
+

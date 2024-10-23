@@ -1,0 +1,660 @@
+---
+title: "Random Forest"
+output: pdf_document
+author: "Alarice Chetty"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(randomForest)
+```
+
+
+```{r admin}
+##everything is done for each of the 4 datasets
+
+all_data     = read.csv("data_combined8.csv")
+evening_data = read.csv("data_evening8.csv")
+morning_data = read.csv("data_morning8.csv")
+peak_data    = read.csv("data_peak8.csv")
+
+##normal data
+attach(all_data)
+all_data$treatment = as.factor(treatment)           ##factor treatment
+all_data$aci       = as.numeric(aci)                ##indices from character to numeric
+all_data$ad        = as.numeric(ad)
+all_data$aei       = as.numeric(aei)
+all_data$bi        = as.numeric(bi)
+all_data$total_ent = as.numeric(total_ent)
+all_data$ndsi      = as.numeric(ndsi)
+all_data$station_id= as.factor(station_id)
+
+
+attach(morning_data)
+morning_data$treatment = as.factor(treatment)        ##factor treatment
+morning_data$aci       = as.numeric(aci)             ##indices from character to numeric
+morning_data$ad        = as.numeric(ad)
+morning_data$aei       = as.numeric(aei)
+morning_data$bi        = as.numeric(bi)
+morning_data$total_ent = as.numeric(total_ent)
+morning_data$ndsi      = as.numeric(ndsi)
+morning_data$station_id= as.factor(station_id)
+
+attach(evening_data)
+evening_data$treatment = as.factor(treatment)        ##factor treatment
+evening_data$aci       = as.numeric(aci)             ##indices from character to numeric
+evening_data$ad        = as.numeric(ad)
+evening_data$aei       = as.numeric(aei)
+evening_data$bi        = as.numeric(bi)
+evening_data$total_ent = as.numeric(total_ent)
+evening_data$ndsi      = as.numeric(ndsi)
+evening_data$station_id= as.factor(station_id)
+
+
+attach(peak_data)
+peak_data$treatment = as.factor(treatment)          ##factor treatment
+peak_data$aci       = as.numeric(aci)               ##indices from character to numeric
+peak_data$ad        = as.numeric(ad)
+peak_data$aei       = as.numeric(aei)
+peak_data$bi        = as.numeric(bi)
+peak_data$total_ent = as.numeric(total_ent)
+peak_data$ndsi      = as.numeric(ndsi)
+peak_data$station_id= as.factor(station_id)
+
+
+calculate_auc = function(fpr, tpr){               ##function to calculate AUC
+  sorted_indices = order(fpr)
+  fpr = fpr[sorted_indices]
+  tpr = tpr[sorted_indices]
+    auc = sum((fpr[-1] - fpr[-length(fpr)]) * (tpr[-1] + tpr[-length(tpr)]) / 2)
+  return(auc)
+}
+```
+
+
+```{r admin 2 }
+set.seed(2024)
+cont_all = filter(all_data,treatment=="control")    ##filter control data
+exc_all  = filter(all_data,treatment=="exclusion")  ##filter exclosure
+devices_cont_all = sample(unique(cont_all$station_id)) ##devices of control
+devices_exc_all  = sample(unique(exc_all$station_id))  ##devices of exclosure
+
+cont_morn = filter(morning_data,treatment=="control")
+exc_morn  = filter(morning_data,treatment=="exclusion")
+devices_cont_morn = sample(unique(cont_morn$station_id))
+devices_exc_morn  = sample(unique(exc_morn$station_id))
+
+cont_even = filter(evening_data,treatment=="control")
+exc_even  = filter(evening_data,treatment=="exclusion")
+devices_cont_even = sample(unique(cont_even$station_id))
+devices_exc_even  = sample(unique(exc_even$station_id))
+
+cont_peak = filter(peak_data,treatment=="control")
+exc_peak  = filter(peak_data,treatment=="exclusion")
+devices_cont_peak = sample(unique(cont_peak$station_id))
+devices_exc_peak  = sample(unique(exc_peak$station_id))
+
+
+
+##creating device folds that will be used in the cross validation
+all_folds_cont = cut(1:length(devices_cont_all), breaks = 5, labels = F)  ##device folds control
+all_folds_exc  = cut(1:length(devices_exc_all), breaks = 5, labels = F)   ##device folds exclosure
+
+morn_folds_cont = cut(1:length(devices_cont_morn), breaks = 5, labels = F)  
+morn_folds_exc  = cut(1:length(devices_exc_morn), breaks = 5, labels = F)  
+
+even_folds_cont = cut(1:length(devices_cont_even), breaks = 5, labels = F)  
+even_folds_exc  = cut(1:length(devices_exc_even), breaks = 5, labels = F)  
+
+peak_folds_cont = cut(1:length(devices_cont_peak), breaks = 5, labels = F)  
+peak_folds_exc  = cut(1:length(devices_exc_peak), breaks = 5, labels = F)  
+```
+
+```{r 5 fold all with threshold}
+set.seed(2024)
+
+all_MCR = c()               ##random forest observation MCR
+all_var_imp = list()        ##variable importance storage
+TPR = c()                   ##observation performance metric storage
+TNR = c()
+PPV = c()
+NPV = c()
+F1  = c()
+all_MCR2l = list()         ##device MCR 
+TPR2l = list()             ##device performance metric storage for each threshold
+FPR2l = list()
+TNR2l = list()
+PPV2l = list()
+NPV2l = list()
+F12l  = list()
+for (fld in 1:5){         ##cross validation
+  train_devices = c(devices_cont_all[all_folds_cont!=fld],devices_exc_all[all_folds_exc!=fld]) ##training devices
+  train = filter(all_data,station_id %in% train_devices)        ##training data                
+  valid = filter(all_data,!station_id %in% train_devices)       ##validation data
+  
+  tunedRF = tuneRF(x = train[,10:15],                           ##Tune Random Forest
+                    y = train$treatment,
+                    mtryStart  = 3,
+                    ntreeTry   = 1000,
+                    stepFactor = 1)
+   
+  rand = randomForest(treatment ~ total_ent + aci + bi + ndsi,   ##Fit Random Forest model 
+                       data       = train, 
+                       importance = TRUE, 
+                       strata     = station_id,
+                       mtry       = tunedRF[1, 1],
+                       ntree      = 1000)
+
+  all_var_imp[[fld]] = randomForest::importance(rand, type = 1)  ##variable importance
+
+  valid_pred = predict(rand, valid)                              ##predict
+  all_MCR    = c(all_MCR, mean(valid_pred != valid$treatment))     ##cv error
+  
+  conf  =  as.matrix(table(Predict=valid_pred,Actual=valid$treatment)) ##confusion matrix
+  TPR[fld] = conf[2,2]/(conf[1,2]+conf[2,2])                     ##observation performance metrics
+  TNR[fld] = conf[1,1]/(conf[1,1]+conf[2,1])                      
+  PPV[fld] = conf[2,2]/(conf[2,2]+conf[2,1])
+  NPV[fld] = conf[1,1]/(conf[1,1]+conf[1,2])
+  F1[fld]  = 2*(TPR[fld]*PPV[fld])/(TPR[fld]+PPV[fld])
+  
+  valid$pred = valid_pred                                         ##add predictions
+  count = Filter(Negate(is.null),(tapply(valid$pred,INDEX = valid$station_id,FUN=table))) #count predictions for each device
+
+  count            = as.data.frame(do.call(rbind, count))         ##data frame
+  count$percexc    = count$exclusion/(count$control+count$exclusion) ##percentage of exclosure
+  TPR2 = c()                                                      ##device performance metrics stored
+  FPR2 = c()
+  TNR2 = c()
+  PPV2 = c()
+  NPV2 = c()
+  F12  = c()
+  all_MCR2 = c()
+  thres = seq(0,1, 0.1)                                           ##threshold - minimum exclosure observations
+  for (i in 1:length(thres)){
+  count$Prediction = ifelse(count$percexc > thres[i], "exclusion", "control") ##device prediction
+  count$station_id = row.names(count)                             ##assign devices
+
+  valid_dim    = unique(select(valid,c("treatment","station_id"))) ##actual stations with their treatment
+  count$actual = valid_dim$treatment                              ##assign actual
+  all_MCR2[i]      =  mean(count$Prediction != count$actual)       ##devie MCR
+
+  conf2     =  as.matrix(table(Predicted = factor(count$Prediction,levels=c("control","exclusion")),
+                               Actual = factor(count$actual)))    ##device confusion matrix
+  TPR2[i] = conf2[2,2]/(conf2[1,2]+conf2[2,2])                    ##device performance metrics
+  FPR2[i] = conf2[2,1]/(conf2[2,1]+conf2[1,1])
+  TNR2[i] = conf2[1,1]/(conf2[1,1]+conf2[2,1])
+  PPV2[i] = conf2[2,2]/(conf2[2,2]+conf2[2,1])
+  NPV2[i] = conf2[1,1]/(conf2[1,1]+conf2[1,2])
+  F12[i]  = 2*(TPR2[i]* PPV2[i])/(TPR2[i]+PPV2[i])
+  }                                   
+  all_MCR2l[[fld]] = all_MCR2                                       ##store for each threshold
+  TPR2l[[fld]] = TPR2 
+  FPR2l[[fld]] = FPR2
+  TNR2l[[fld]] = TNR2
+  PPV2l[[fld]] = PPV2
+  NPV2l[[fld]] = NPV2
+  F12l[[fld]]  = F12
+  print(paste0("Fold Completed:",fld))
+}
+
+
+
+mean_tpr2 = rowMeans(do.call(cbind, TPR2l), na.rm = TRUE) ##mean of performance metrics for each threshold over folds
+mean_fpr2 = rowMeans(do.call(cbind, FPR2l), na.rm = TRUE)
+mean_MCR2  = rowMeans(do.call(cbind, all_MCR2l), na.rm = TRUE)
+mean_F12  = rowMeans(do.call(cbind, F12l), na.rm = TRUE)
+
+sd_MCR2  = apply(do.call(cbind, all_MCR2l), 1, sd, na.rm = TRUE)##sd of performance metrics for each threshold over folds
+sd_tpr2 = apply(do.call(cbind, TPR2l), 1, sd, na.rm = TRUE)
+sd_F12  = apply(do.call(cbind, F12l), 1, sd, na.rm = TRUE)
+
+  
+plot(mean_fpr2, mean_tpr2, type = "l", col = "blue", lwd = 2, ##ROC plot
+     xlab = "False Positive Rate",
+     ylab = "True Positive Rate",
+     main = "All Dataset")
+abline(a = 0, b = 1, col = "black", lty = 2)
+opt = which.min(sqrt((0 - mean_fpr2)^2+(1 - mean_tpr2)^2))    ##optimal threshold
+points(mean_tpr2[opt] ~ mean_fpr2[opt], col = 'red', pch = 16)
+text(mean_tpr2[opt] ~ mean_fpr2[opt], labels = thres[opt], pos = 2)
+
+calculate_auc(mean_fpr2, mean_tpr2)    ##calculate AUC
+
+
+mean_tpr = mean(TPR)                  ##observation performance metric means and sd
+mean_mcr = mean(all_MCR)
+mean_F1  = mean(F1)
+sd_tpr = sd(TPR)
+sd_mcr = sd(all_MCR)
+sd_F1  = sd(F1) 
+mean_MCR2[opt]                        ##device performance metric means and sd for optimal threshold
+mean_tpr2[opt]
+mean_F12[opt]
+sd_MCR2[opt]
+sd_tpr2[opt]
+sd_F12[opt]
+
+
+all_mean_imp <- Reduce("+", all_var_imp) / length(all_var_imp) ##ave variable imp
+all_mean_imp <- all_mean_imp[order(all_mean_imp, decreasing = TRUE), ]
+barplot(all_mean_imp,                                          ##variable importance plot
+        horiz = TRUE, 
+        col = 'navy', 
+        las = 1,
+        xlab = 'Mean decrease in Accuracy',
+        names.arg = c("BIO","NDSI","ACI","H"),
+        main = "All Dataset")
+```
+
+
+```{r 5 fold morning with threshold}
+set.seed(2024)
+
+morn_MCR = c()              ##random forest observation MCR
+morn_var_imp = list()       ##variable importance storage
+TPR = c()                   ##observation performance metric storage
+TNR = c()
+PPV = c()
+NPV = c()
+F1  = c()
+morn_MCR2l = list()        ##device MCR 
+TPR2l = list()             ##device performance metric storage for each threshold
+FPR2l = list()
+TNR2l = list()
+PPV2l = list()
+NPV2l = list()
+F12l  = list()
+for (fld in 1:5){         ##cross validation
+  train_devices = c(devices_cont_morn[morn_folds_cont!=fld],devices_exc_morn[morn_folds_exc!=fld]) ##training devices
+  train = filter(morning_data,station_id %in% train_devices)        ##training data                
+  valid = filter(morning_data,!station_id %in% train_devices)       ##validation data
+  
+  tunedRF = tuneRF(x = train[,10:15],                           ##Tune Random Forest
+                    y = train$treatment,
+                    mtryStart  = 3,
+                    ntreeTry   = 1000,
+                    stepFactor = 1)
+   
+  rand = randomForest(treatment ~ total_ent + aci + bi + ndsi,   ##Fit Random Forest model 
+                       data       = train, 
+                       importance = TRUE, 
+                       strata     = station_id,
+                       mtry       = tunedRF[1, 1],
+                       ntree      = 1000)
+
+  morn_var_imp[[fld]] = randomForest::importance(rand, type = 1)  ##variable importance
+
+  valid_pred = predict(rand, valid)                                  ##predict
+  morn_MCR    = c(morn_MCR, mean(valid_pred != valid$treatment))     ##cv error
+  
+  conf  =  as.matrix(table(Predict=valid_pred,Actual=valid$treatment)) ##confusion matrix
+  TPR[fld] = conf[2,2]/(conf[1,2]+conf[2,2])                     ##observation performance metrics
+  TNR[fld] = conf[1,1]/(conf[1,1]+conf[2,1])                      
+  PPV[fld] = conf[2,2]/(conf[2,2]+conf[2,1])
+  NPV[fld] = conf[1,1]/(conf[1,1]+conf[1,2])
+  F1[fld]  = 2*(TPR[fld]*PPV[fld])/(TPR[fld]+PPV[fld])
+  
+  valid$pred = valid_pred                                         ##add predictions
+  count = Filter(Negate(is.null),(tapply(valid$pred,INDEX = valid$station_id,FUN=table))) #count predictions for each device
+
+  count            = as.data.frame(do.call(rbind, count))         ##data frame
+  count$percexc    = count$exclusion/(count$control+count$exclusion) ##percentage of exclosure
+  TPR2 = c()                                                      ##device performance metrics stored
+  FPR2 = c()
+  TNR2 = c()
+  PPV2 = c()
+  NPV2 = c()
+  F12  = c()
+  morn_MCR2 = c()
+  thres = seq(0,1, 0.1)                                           ##threshold - minimum exclosure observations
+  for (i in 1:length(thres)){
+  count$Prediction = ifelse(count$percexc > thres[i], "exclusion", "control") ##device prediction
+  count$station_id = row.names(count)                             ##assign devices
+
+  valid_dim    = unique(select(valid,c("treatment","station_id"))) ##actual stations with their treatment
+  count$actual = valid_dim$treatment                              ##assign actual
+  morn_MCR2[i]      =  mean(count$Prediction != count$actual)       ##devie MCR
+
+  conf2     =  as.matrix(table(Predicted = factor(count$Prediction,levels=c("control","exclusion")),
+                               Actual = factor(count$actual)))    ##device confusion matrix
+  TPR2[i] = conf2[2,2]/(conf2[1,2]+conf2[2,2])                    ##device performance metrics
+  FPR2[i] = conf2[2,1]/(conf2[2,1]+conf2[1,1])
+  TNR2[i] = conf2[1,1]/(conf2[1,1]+conf2[2,1])
+  PPV2[i] = conf2[2,2]/(conf2[2,2]+conf2[2,1])
+  NPV2[i] = conf2[1,1]/(conf2[1,1]+conf2[1,2])
+  F12[i]  = 2*(TPR2[i]* PPV2[i])/(TPR2[i]+PPV2[i])
+  }                                   
+  morn_MCR2l[[fld]] = morn_MCR2                                       ##store for each threshold
+  TPR2l[[fld]] = TPR2 
+  FPR2l[[fld]] = FPR2
+  TNR2l[[fld]] = TNR2
+  PPV2l[[fld]] = PPV2
+  NPV2l[[fld]] = NPV2
+  F12l[[fld]]  = F12
+  print(paste0("Fold Completed:",fld))
+}
+
+
+
+mean_tpr2 = rowMeans(do.call(cbind, TPR2l), na.rm = TRUE) ##mean of performance metrics for each threshold over folds
+mean_fpr2 = rowMeans(do.call(cbind, FPR2l), na.rm = TRUE)
+mean_MCR2  = rowMeans(do.call(cbind, morn_MCR2l), na.rm = TRUE)
+mean_F12  = rowMeans(do.call(cbind, F12l), na.rm = TRUE)
+
+sd_MCR2  = apply(do.call(cbind, morn_MCR2l), 1, sd, na.rm = TRUE)##sd of performance metrics for each threshold over folds
+sd_tpr2 = apply(do.call(cbind, TPR2l), 1, sd, na.rm = TRUE)
+sd_F12  = apply(do.call(cbind, F12l), 1, sd, na.rm = TRUE)
+
+  
+plot(mean_fpr2, mean_tpr2, type = "l", col = "blue", lwd = 2, ##ROC plot
+     xlab = "False Positive Rate",
+     ylab = "True Positive Rate",
+     main = "Morning Dataset")
+abline(a = 0, b = 1, col = "black", lty = 2)
+opt = which.min(sqrt((0 - mean_fpr2)^2+(1 - mean_tpr2)^2))    ##optimal threshold
+points(mean_tpr2[opt] ~ mean_fpr2[opt], col = 'red', pch = 16)
+text(mean_tpr2[opt] ~ mean_fpr2[opt], labels = thres[opt], pos = 2)
+
+calculate_auc(mean_fpr2, mean_tpr2)    ##calculate AUC
+
+
+mean_tpr = mean(TPR)                  ##observation performance metric means and sd
+mean_mcr = mean(morn_MCR)
+mean_F1  = mean(F1)
+sd_tpr = sd(TPR)
+sd_mcr = sd(morn_MCR)
+sd_F1  = sd(F1) 
+mean_MCR2[opt]                        ##device performance metric means and sd for optimal threshold
+mean_tpr2[opt]
+mean_F12[opt]
+sd_MCR2[opt]
+sd_tpr2[opt]
+sd_F12[opt]
+
+
+morn_mean_imp <- Reduce("+", morn_var_imp) / length(morn_var_imp) ##ave variable imp
+morn_mean_imp <- morn_mean_imp[order(morn_mean_imp, decreasing = TRUE), ]
+barplot(morn_mean_imp,                                          ##variable importance plot
+        horiz = TRUE, 
+        col = 'navy', 
+        las = 1,
+        xlab = 'Mean decrease in Accuracy',
+        names.arg = c("H","NDSI","BIO","ACI"),
+        main = "Morning Dataset")
+```
+
+
+```{r 5 fold evening with threshold}
+set.seed(2024)
+
+even_MCR = c()              ##random forest observation MCR
+even_var_imp = list()       ##variable importance storage
+TPR = c()                   ##observation performance metric storage
+TNR = c()
+PPV = c()
+NPV = c()
+F1  = c()
+even_MCR2l = list()        ##device MCR 
+TPR2l = list()             ##device performance metric storage for each threshold
+FPR2l = list()
+TNR2l = list()
+PPV2l = list()
+NPV2l = list()
+F12l  = list()
+for (fld in 1:5){         ##cross validation
+  train_devices = c(devices_cont_even[even_folds_cont!=fld],devices_exc_even[even_folds_exc!=fld]) ##training devices
+  train = filter(evening_data,station_id %in% train_devices)        ##training data                
+  valid = filter(evening_data,!station_id %in% train_devices)       ##validation data
+  
+  tunedRF = tuneRF(x = train[,10:15],                           ##Tune Random Forest
+                    y = train$treatment,
+                    mtryStart  = 3,
+                    ntreeTry   = 1000,
+                    stepFactor = 1)
+   
+  rand = randomForest(treatment ~ total_ent + aci + bi + ndsi,   ##Fit Random Forest model 
+                       data       = train, 
+                       importance = TRUE, 
+                       strata     = station_id,
+                       mtry       = tunedRF[1, 1],
+                       ntree      = 1000)
+
+  even_var_imp[[fld]] = randomForest::importance(rand, type = 1)  ##variable importance
+
+  valid_pred = predict(rand, valid)                                  ##predict
+  even_MCR    = c(even_MCR, mean(valid_pred != valid$treatment))     ##cv error
+  
+  conf  =  as.matrix(table(Predict=valid_pred,Actual=valid$treatment)) ##confusion matrix
+  TPR[fld] = conf[2,2]/(conf[1,2]+conf[2,2])                     ##observation performance metrics
+  TNR[fld] = conf[1,1]/(conf[1,1]+conf[2,1])                      
+  PPV[fld] = conf[2,2]/(conf[2,2]+conf[2,1])
+  NPV[fld] = conf[1,1]/(conf[1,1]+conf[1,2])
+  F1[fld]  = 2*(TPR[fld]*PPV[fld])/(TPR[fld]+PPV[fld])
+  
+  valid$pred = valid_pred                                         ##add predictions
+  count = Filter(Negate(is.null),(tapply(valid$pred,INDEX = valid$station_id,FUN=table))) #count predictions for each device
+
+  count            = as.data.frame(do.call(rbind, count))         ##data frame
+  count$percexc    = count$exclusion/(count$control+count$exclusion) ##percentage of exclosure
+  TPR2 = c()                                                      ##device performance metrics stored
+  FPR2 = c()
+  TNR2 = c()
+  PPV2 = c()
+  NPV2 = c()
+  F12  = c()
+  even_MCR2 = c()
+  thres = seq(0,1, 0.1)                                           ##threshold - minimum exclosure observations
+  for (i in 1:length(thres)){
+  count$Prediction = ifelse(count$percexc > thres[i], "exclusion", "control") ##device prediction
+  count$station_id = row.names(count)                             ##assign devices
+
+  valid_dim    = unique(select(valid,c("treatment","station_id"))) ##actual stations with their treatment
+  count$actual = valid_dim$treatment                              ##assign actual
+  even_MCR2[i]      =  mean(count$Prediction != count$actual)       ##devie MCR
+
+  conf2     =  as.matrix(table(Predicted = factor(count$Prediction,levels=c("control","exclusion")),
+                               Actual = factor(count$actual)))    ##device confusion matrix
+  TPR2[i] = conf2[2,2]/(conf2[1,2]+conf2[2,2])                    ##device performance metrics
+  FPR2[i] = conf2[2,1]/(conf2[2,1]+conf2[1,1])
+  TNR2[i] = conf2[1,1]/(conf2[1,1]+conf2[2,1])
+  PPV2[i] = conf2[2,2]/(conf2[2,2]+conf2[2,1])
+  NPV2[i] = conf2[1,1]/(conf2[1,1]+conf2[1,2])
+  F12[i]  = 2*(TPR2[i]* PPV2[i])/(TPR2[i]+PPV2[i])
+  }                                   
+  even_MCR2l[[fld]] = even_MCR2                                       ##store for each threshold
+  TPR2l[[fld]] = TPR2 
+  FPR2l[[fld]] = FPR2
+  TNR2l[[fld]] = TNR2
+  PPV2l[[fld]] = PPV2
+  NPV2l[[fld]] = NPV2
+  F12l[[fld]]  = F12
+  print(paste0("Fold Completed:",fld))
+}
+
+
+
+mean_tpr2 = rowMeans(do.call(cbind, TPR2l), na.rm = TRUE) ##mean of performance metrics for each threshold over folds
+mean_fpr2 = rowMeans(do.call(cbind, FPR2l), na.rm = TRUE)
+mean_MCR2  = rowMeans(do.call(cbind, even_MCR2l), na.rm = TRUE)
+mean_F12  = rowMeans(do.call(cbind, F12l), na.rm = TRUE)
+
+sd_MCR2  = apply(do.call(cbind, even_MCR2l), 1, sd, na.rm = TRUE)##sd of performance metrics for each threshold over folds
+sd_tpr2 = apply(do.call(cbind, TPR2l), 1, sd, na.rm = TRUE)
+sd_F12  = apply(do.call(cbind, F12l), 1, sd, na.rm = TRUE)
+
+  
+plot(mean_fpr2, mean_tpr2, type = "l", col = "blue", lwd = 2, ##ROC plot
+     xlab = "False Positive Rate",
+     ylab = "True Positive Rate",
+     main = "Evening Dataset")
+abline(a = 0, b = 1, col = "black", lty = 2)
+opt = which.min(sqrt((0 - mean_fpr2)^2+(1 - mean_tpr2)^2))    ##optimal threshold
+points(mean_tpr2[opt] ~ mean_fpr2[opt], col = 'red', pch = 16)
+text(mean_tpr2[opt] ~ mean_fpr2[opt], labels = thres[opt], pos = 2)
+
+calculate_auc(mean_fpr2, mean_tpr2)    ##calculate AUC
+
+
+mean_tpr = mean(TPR)                  ##observation performance metric means and sd
+mean_mcr = mean(even_MCR)
+mean_F1  = mean(F1)
+sd_tpr = sd(TPR)
+sd_mcr = sd(even_MCR)
+sd_F1  = sd(F1) 
+mean_MCR2[opt]                        ##device performance metric means and sd for optimal threshold
+mean_tpr2[opt]
+mean_F12[opt]
+sd_MCR2[opt]
+sd_tpr2[opt]
+sd_F12[opt]
+
+
+even_mean_imp <- Reduce("+", even_var_imp) / length(even_var_imp) ##ave variable imp
+even_mean_imp <- even_mean_imp[order(even_mean_imp, decreasing = TRUE), ]
+barplot(even_mean_imp,                                          ##variable importance plot
+        horiz = TRUE, 
+        col = 'navy', 
+        las = 1,
+        xlab = 'Mean decrease in Accuracy',
+        names.arg = c("BIO","ACI","H","NDSI"),
+        main = "Evening Dataset")
+```
+
+
+```{r 5 fold peak with threshold}
+set.seed(2024)
+
+peak_MCR = c()              ##random forest observation MCR
+peak_var_imp = list()       ##variable importance storage
+TPR = c()                   ##observation performance metric storage
+TNR = c()
+PPV = c()
+NPV = c()
+F1  = c()
+peak_MCR2l = list()        ##device MCR 
+TPR2l = list()             ##device performance metric storage for each threshold
+FPR2l = list()
+TNR2l = list()
+PPV2l = list()
+NPV2l = list()
+F12l  = list()
+for (fld in 1:5){         ##cross validation
+  train_devices = c(devices_cont_peak[peak_folds_cont!=fld],devices_exc_peak[peak_folds_exc!=fld]) ##training devices
+  train = filter(peak_data,station_id %in% train_devices)        ##training data                
+  valid = filter(peak_data,!station_id %in% train_devices)       ##validation data
+  
+  tunedRF = tuneRF(x = train[,10:15],                           ##Tune Random Forest
+                    y = train$treatment,
+                    mtryStart  = 3,
+                    ntreeTry   = 1000,
+                    stepFactor = 1)
+   
+  rand = randomForest(treatment ~ total_ent + aci + bi + ndsi,   ##Fit Random Forest model 
+                       data       = train, 
+                       importance = TRUE, 
+                       strata     = station_id,
+                       mtry       = tunedRF[1, 1],
+                       ntree      = 1000)
+
+  peak_var_imp[[fld]] = randomForest::importance(rand, type = 1)  ##variable importance
+
+  valid_pred = predict(rand, valid)                                  ##predict
+  peak_MCR    = c(peak_MCR, mean(valid_pred != valid$treatment))     ##cv error
+  
+  conf  =  as.matrix(table(Predict=valid_pred,Actual=valid$treatment)) ##confusion matrix
+  TPR[fld] = conf[2,2]/(conf[1,2]+conf[2,2])                     ##observation performance metrics
+  TNR[fld] = conf[1,1]/(conf[1,1]+conf[2,1])                      
+  PPV[fld] = conf[2,2]/(conf[2,2]+conf[2,1])
+  NPV[fld] = conf[1,1]/(conf[1,1]+conf[1,2])
+  F1[fld]  = 2*(TPR[fld]*PPV[fld])/(TPR[fld]+PPV[fld])
+  
+  valid$pred = valid_pred                                         ##add predictions
+  count = Filter(Negate(is.null),(tapply(valid$pred,INDEX = valid$station_id,FUN=table))) #count predictions for each device
+
+  count            = as.data.frame(do.call(rbind, count))         ##data frame
+  count$percexc    = count$exclusion/(count$control+count$exclusion) ##percentage of exclosure
+  TPR2 = c()                                                      ##device performance metrics stored
+  FPR2 = c()
+  TNR2 = c()
+  PPV2 = c()
+  NPV2 = c()
+  F12  = c()
+  peak_MCR2 = c()
+  thres = seq(0,1, 0.1)                                           ##threshold - minimum exclosure observations
+  for (i in 1:length(thres)){
+  count$Prediction = ifelse(count$percexc > thres[i], "exclusion", "control") ##device prediction
+  count$station_id = row.names(count)                             ##assign devices
+
+  valid_dim    = unique(select(valid,c("treatment","station_id"))) ##actual stations with their treatment
+  count$actual = valid_dim$treatment                              ##assign actual
+  peak_MCR2[i]      =  mean(count$Prediction != count$actual)       ##devie MCR
+
+  conf2     =  as.matrix(table(Predicted = factor(count$Prediction,levels=c("control","exclusion")),
+                               Actual = factor(count$actual)))    ##device confusion matrix
+  TPR2[i] = conf2[2,2]/(conf2[1,2]+conf2[2,2])                    ##device performance metrics
+  FPR2[i] = conf2[2,1]/(conf2[2,1]+conf2[1,1])
+  TNR2[i] = conf2[1,1]/(conf2[1,1]+conf2[2,1])
+  PPV2[i] = conf2[2,2]/(conf2[2,2]+conf2[2,1])
+  NPV2[i] = conf2[1,1]/(conf2[1,1]+conf2[1,2])
+  F12[i]  = 2*(TPR2[i]* PPV2[i])/(TPR2[i]+PPV2[i])
+  }                                   
+  peak_MCR2l[[fld]] = peak_MCR2                                       ##store for each threshold
+  TPR2l[[fld]] = TPR2 
+  FPR2l[[fld]] = FPR2
+  TNR2l[[fld]] = TNR2
+  PPV2l[[fld]] = PPV2
+  NPV2l[[fld]] = NPV2
+  F12l[[fld]]  = F12
+  print(paste0("Fold Completed:",fld))
+}
+
+
+
+mean_tpr2 = rowMeans(do.call(cbind, TPR2l), na.rm = TRUE) ##mean of performance metrics for each threshold over folds
+mean_fpr2 = rowMeans(do.call(cbind, FPR2l), na.rm = TRUE)
+mean_MCR2  = rowMeans(do.call(cbind, peak_MCR2l), na.rm = TRUE)
+mean_F12  = rowMeans(do.call(cbind, F12l), na.rm = TRUE)
+
+sd_MCR2  = apply(do.call(cbind, peak_MCR2l), 1, sd, na.rm = TRUE)##sd of performance metrics for each threshold over folds
+sd_tpr2 = apply(do.call(cbind, TPR2l), 1, sd, na.rm = TRUE)
+sd_F12  = apply(do.call(cbind, F12l), 1, sd, na.rm = TRUE)
+
+  
+plot(mean_fpr2, mean_tpr2, type = "l", col = "blue", lwd = 2, ##ROC plot
+     xlab = "False Positive Rate",
+     ylab = "True Positive Rate",
+     main = "Peak Dataset")
+abline(a = 0, b = 1, col = "black", lty = 2)
+opt = which.min(sqrt((0 - mean_fpr2)^2+(1 - mean_tpr2)^2))    ##optimal threshold
+points(mean_tpr2[opt] ~ mean_fpr2[opt], col = 'red', pch = 16)
+text(mean_tpr2[opt] ~ mean_fpr2[opt], labels = thres[opt], pos = 2)
+
+calculate_auc(mean_fpr2, mean_tpr2)    ##calculate AUC
+
+
+mean_tpr = mean(TPR)                  ##observation performance metric means and sd
+mean_mcr = mean(peak_MCR)
+mean_F1  = mean(F1)
+sd_tpr = sd(TPR)
+sd_mcr = sd(peak_MCR)
+sd_F1  = sd(F1) 
+mean_MCR2[opt]                        ##device performance metric means and sd for optimal threshold
+mean_tpr2[opt]
+mean_F12[opt]
+sd_MCR2[opt]
+sd_tpr2[opt]
+sd_F12[opt]
+
+
+peak_mean_imp <- Reduce("+", peak_var_imp) / length(peak_var_imp) ##ave variable imp
+peak_mean_imp <- peak_mean_imp[order(peak_mean_imp, decreasing = TRUE), ]
+barplot(peak_mean_imp,                                          ##variable importance plot
+        horiz = TRUE, 
+        col = 'navy', 
+        las = 1,
+        xlab = 'Mean decrease in Accuracy',
+        names.arg = c("BIO","ACI","H","NDSI"),
+        main = "Peak Dataset")
+```
+

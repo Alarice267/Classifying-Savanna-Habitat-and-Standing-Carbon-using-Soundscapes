@@ -1,0 +1,129 @@
+---
+title: "GLMM Uncertainty"
+output: pdf_document
+date: "Alarice Chetty"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+install.packages("lme4")
+library(lme4)
+library(dplyr)
+library(car)
+library(usdm)
+```
+
+
+```{r admin, echo=FALSE,message=FALSE}
+evening_data = read.csv("data_evening7_unscaled.csv")
+
+
+attach(evening_data)
+evening_data$treatment = as.factor(treatment)        ##factor treatment
+evening_data$aci       = as.numeric(aci)             ##indices from character to numeric
+evening_data$ad        = as.numeric(ad)
+evening_data$aei       = as.numeric(aei)
+evening_data$bi        = as.numeric(bi)
+evening_data$total_ent = as.numeric(total_ent)
+evening_data$ndsi      = as.numeric(ndsi)
+evening_data$station_id= as.factor(station_id)
+```
+
+
+```{r cv with all devices}
+
+cont_data = filter(evening_data,treatment=="control")     ##control data
+exc_data  = filter(evening_data,treatment=="exclusion")   ##exclosure data
+
+train_cont = cont_data|> group_by(station_id)|>sample_n(0.8*length(station_id))|>ungroup() ##80% of each control device
+train_exc  = exc_data|> group_by(station_id)|>sample_n(0.8*length(station_id))|>ungroup()  ##80% of each exclosure device
+
+
+train = rbind(train_cont,train_exc)                       ##training dataset       
+valid = anti_join(evening_data,train,by="X")              ##validation dataset  
+
+glm4 = glmer(treatment ~ total_ent + aci + bi+ndsi+(1|station_id),   ##glmm model
+             data=train,
+             family=binomial)
+
+pred         = predict(glm4, type="response",newdata=valid)                     ##predict probabilites 
+bound_val    = ifelse(pred>0.5,"exclusion","control")                           ##predict classifications
+mean(bound_val != valid$treatment)                                              ##misclass rate
+
+summary(glm4)
+
+```
+
+
+```{r cv  by station greg}
+
+cont_data_st = filter(evening_data,treatment=="control")          ##control data
+exc_data_st  = filter(evening_data,treatment=="exclusion")        ##exclosure data  
+devices_cont_st = unique(cont_data_st$station_id)                 ##control devices
+devices_exc_st  = unique(exc_data_st$station_id)                  ##exclosure devices
+
+set.seed(1000)
+a = sample(devices_cont_st,27)
+b = sample(devices_exc_st,8)
+
+train_devices_st = c(a,b)
+train_st <- filter(evening_data,station_id %in% train_devices_st)                  
+valid_st <- filter(evening_data,!station_id %in% train_devices_st) 
+valid_test = valid_st[valid_st$station_id=="mes12",]
+valid_test$station_id = "mes10"
+train_st$station_id 
+str(train_st)
+glm_st = glmer(treatment ~ total_ent + aci + bi+ndsi+(1|station_id),
+               data=train_st,
+               family=binomial)
+
+
+prob =predict(glm_st, type="response",newdata=valid_st,allow.new.levels=TRUE)
+prob_test =predict(glm_st, type="response",newdata=valid_test,allow.new.levels=TRUE)
+
+bound_val    = ifelse(prob>0.5,"exclusion","control")                           ##predict classifications
+bound_val_test= ifelse(prob_test>0.5,"exclusion","control")                           ##predict classifications
+
+mean(bound_val != valid_st$treatment)      
+valid_st$pred = bound_val ##add predictions
+##misclass rate
+mean(bound_val_test != valid_test$treatment)                                           ##misclass rate
+
+
+valid_test$pred = bound_val_test ##add predictions
+count = Filter(Negate(is.null),(tapply(factor(valid_st$pred,levels=c("control","exclosure")),INDEX = valid_st$station_id,FUN=table))) #count predictions for each device
+
+summary(glm_st)
+ranef(glm_st)
+```
+
+
+
+```{r cv by station}
+
+cont_data_st = filter(evening_data,treatment=="control")          ##control data
+exc_data_st  = filter(evening_data,treatment=="exclusion")        ##exclosure data  
+devices_cont_st = unique(cont_data_st$station_id)                 ##control devices
+devices_exc_st  = unique(exc_data_st$station_id)                  ##exclosure devices
+
+set.seed(1000)                                                    ##set seed
+a = sample(devices_cont_st,27)                                    ##devices from control
+b = sample(devices_exc_st,8)                                      ##devices from exclosures
+
+train_devices_st = c(a,b)                                         ##train devices
+train_st <- filter(evening_data,station_id %in% train_devices_st) ##data of train devices 
+valid_st <- filter(evening_data,!station_id %in% train_devices_st) ##data of test devices
+
+glm_st = glmer(treatment ~ total_ent + aci + bi + ndsi + (1|station_id), ##glmm
+               data = train_st,
+               family =binomial(link = 'logit'))
+
+summary(glm_st)
+prob = predict(glm_st, type="response",newdata=valid_st,allow.new.levels=TRUE)  ##probabilites
+
+bound_val    = ifelse(prob>0.5,"exclusion","control")                           ##predict classifications
+mean(bound_val != valid_st$treatment)      
+valid_st$pred = bound_val ##add predictions
+ranef(glm_st)
+
+```

@@ -1,0 +1,1 @@
+These are the rmd files used to complete the honours project on Classifying Savannah Habitats and standing carbon using Soundscapes. Note that the biomass EDA and modelling is all done in one file, whilst the Management Type (MT) has been split into EDA, Random Forests, GEE and GLMM. There is one file whereby the working correlations structure is tested for both MT and Biomass

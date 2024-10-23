@@ -1,0 +1,360 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-10-07"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(geepack)
+library(caret)
+library(dplyr)
+library(reshape)
+library(tidyr)
+```
+
+
+```{r}
+all_data     = read.csv("data_combined8.csv")
+evening_data = read.csv("data_evening8.csv")
+morning_data = read.csv("data_morning8.csv")
+peak_data    = read.csv("data_peak8.csv")
+
+##normal data
+all_data$treatment  = as.factor(all_data$treatment)        ##factor treatment
+all_data$station_id = as.factor(all_data$station_id)
+all_data$site_id    = as.numeric(as.factor(all_data$site_id))
+
+
+morning_data$treatment  = as.factor(morning_data$treatment)        ##factor treatment
+morning_data$station_id = as.factor(morning_data$station_id)
+morning_data$site_id    = as.numeric(as.factor(morning_data$site_id))
+
+evening_data$treatment  = as.factor(evening_data$treatment)        ##factor treatment
+evening_data$station_id = as.factor(evening_data$station_id)
+evening_data$site_id    = as.numeric(as.factor(evening_data$site_id))
+
+
+peak_data$treatment  = as.factor(peak_data$treatment)        ##factor treatment
+peak_data$station_id = as.factor(peak_data$station_id)
+peak_data$site_id    = as.numeric(as.factor(peak_data$site_id))
+
+
+all_data[,10:15]     = scale(all_data[,10:15])
+morning_data[,10:15] = scale(morning_data[,10:15])
+evening_data[,10:15] = scale(evening_data[,10:15])
+peak_data[,10:15]    = scale(peak_data[,10:15])
+```
+
+
+```{r mt peak }
+
+gee_model_peak_ar1 = geeglm(ifelse(treatment=="control",1,0) ~ total_ent + aci + bi + ndsi,
+                      id     = station_id,
+                      data   = na.omit(peak_data),
+                      family = binomial("logit"),
+                      corstr ="ar1",
+                      scale.fix = TRUE)
+gee_model_peak_ex = geeglm(ifelse(treatment == "control", 1, 0) ~ total_ent + aci + bi + ndsi,
+                      id = station_id,
+                      data = na.omit(peak_data),
+                      family = binomial("logit"),
+                      corstr = "exchangeable",
+                      scale.fix = TRUE)
+gee_model_peak_ind = geeglm(ifelse(treatment == "control", 1, 0) ~ total_ent + aci + bi + ndsi,
+                      id = station_id,
+                      data = na.omit(peak_data),
+                      family = binomial("logit"),
+                      corstr = "independence",
+                      scale.fix = TRUE)
+
+qic_peak_ar1 = geepack::QIC(gee_model_peak_ar1)
+qic_peak_ex = geepack::QIC(gee_model_peak_ex)
+qic_peak_ind = geepack::QIC(gee_model_peak_ind)
+
+summary(gee_model_peak_ar1)
+summary(gee_model_peak_ex)
+summary(gee_model_peak_ind)
+
+#qic_peak_un = geepack::QIC(gee_model_peak_un)
+```
+
+
+```{r mt even}
+
+gee_model_even_ar1 = geeglm(ifelse(treatment=="control",1,0) ~ total_ent + aci  + ndsi,
+                      id     = station_id,
+                      data   = na.omit(evening_data),
+                      family = binomial("logit"),
+                      corstr ="ar1",
+                      scale.fix = TRUE)
+gee_model_even_ex = geeglm(ifelse(treatment == "control", 1, 0) ~ aci + bi ,
+                      id = station_id,
+                      data = na.omit(evening_data),
+                      family = binomial("logit"),
+                      corstr = "exchangeable",
+                      scale.fix = TRUE)
+gee_model_even_ind = geeglm(ifelse(treatment == "control", 1, 0) ~ total_ent + aci + bi + ndsi,
+                      id = station_id,
+                      data = na.omit(evening_data),
+                      family = binomial("logit"),
+                      corstr = "independence",
+                      scale.fix = TRUE)
+#gee_model_even_un = geeglm(ifelse(treatment == "control", 1, 0) ~ total_ent + aci + bi + ndsi,
+#                      id = station_id,
+#                      data = na.omit(evening_data),
+#                      family = binomial("logit"),
+#                      corstr = "unstructured",
+#                      scale.fix = TRUE)
+qic_even_ar1 = geepack::QIC(gee_model_even_ar1)
+qic_even_ex = geepack::QIC(gee_model_even_ex)
+qic_even_ind = geepack::QIC(gee_model_even_ind)
+summary(gee_model_even_ar1)
+summary(gee_model_even_ex)
+summary(gee_model_even_ind)
+qic_even_ar1
+vif(gee_model_even_ar1)
+qic_even_ex
+qic_even_ind
+#qic_even_un = geepack::QIC(gee_model_even_un)
+```
+
+
+```{r mt morn}
+
+gee_model_morn_ar1 = geeglm(ifelse(treatment=="control",1,0) ~ total_ent + aci + ndsi,
+                      id     = station_id,
+                      data   = na.omit(morning_data),
+                      family = binomial("logit"),
+                      corstr ="ar1",
+                      scale.fix = TRUE)
+gee_model_morn_ex = geeglm(ifelse(treatment == "control", 1, 0) ~ total_ent + aci + bi + ndsi,
+                      id = station_id,
+                      data = na.omit(morning_data),
+                      family = binomial("logit"),
+                      corstr = "exchangeable",
+                      scale.fix = TRUE)
+gee_model_morn_ind = geeglm(ifelse(treatment == "control", 1, 0) ~ total_ent + aci + bi + ndsi,
+                      id = station_id,
+                      data = na.omit(morning_data),
+                      family = binomial("logit"),
+                      corstr = "independence",
+                      scale.fix = TRUE)
+
+qic_morn_ar1 = geepack::QIC(gee_model_morn_ar1)
+qic_morn_ex = geepack::QIC(gee_model_morn_ex)
+qic_morn_ind = geepack::QIC(gee_model_morn_ind)
+
+summary(gee_model_morn_ar1)
+summary(gee_model_morn_ex)
+summary(gee_model_morn_ind)
+qic_morn_ar1
+qic_morn_ex
+qic_morn_ind
+vif(gee_model_morn_ar1)
+vif(gee_model_even_ar1)
+vif(gee_model_even_ex)
+
+```
+
+
+```{r mt all}
+gee_model_all_ind = geeglm(ifelse(treatment == "control", 1, 0) ~ total_ent + aci + bi + ndsi,
+                      id = station_id,
+                      data = na.omit(all_data),
+                      family = binomial("logit"),
+                      corstr = "independence",
+                      scale.fix = TRUE)
+qic_all_ind = geepack::QIC(gee_model_all_ind)
+qic_all_ind
+summary(gee_model_all_ind)
+
+gee_model_all_ex = geeglm(ifelse(treatment == "control", 1, 0) ~ total_ent + aci + bi + ndsi,
+                      id = station_id,
+                      data = na.omit(all_data),
+                      family = binomial("logit"),
+                      corstr = "exchangeable",
+                      scale.fix = TRUE)
+
+qic_all_ex = geepack::QIC(gee_model_all_ex)
+qic_all_ex
+summary(gee_model_all_ex)
+
+```
+
+
+
+```{r bio admin}
+carbon_data = read.csv("carbon.csv")|>
+  na.omit()|>
+  select(biomass,station_name)|>
+  plyr::rename(c("station_name" = "site_id"))   
+
+  
+
+all_data     = read.csv("data_combined8.csv")
+evening_data = read.csv("data_evening8.csv")
+morning_data = read.csv("data_morning8.csv")
+peak_data    = read.csv("data_peak8.csv")
+
+
+all_data[,10:15]     = scale(all_data[,10:15])
+morning_data[,10:15] = scale(morning_data[,10:15])
+evening_data[,10:15] = scale(evening_data[,10:15])
+peak_data[,10:15]    = scale(peak_data[,10:15])
+
+carbon_ind_all  = merge(all_data,carbon_data, by = 'site_id')
+carbon_ind_even = merge(evening_data,carbon_data, by = 'site_id')
+carbon_ind_morn = merge(morning_data,carbon_data, by = 'site_id')
+carbon_ind_peak = merge(peak_data,carbon_data, by = 'site_id')
+
+set.seed(2024)
+devices_all  = sample(unique(carbon_ind_all$station_id))
+devices_morn = sample(unique(carbon_ind_morn$station_id))
+devices_even = sample(unique(carbon_ind_even$station_id))
+devices_peak = sample(unique(carbon_ind_peak$station_id))
+
+all_folds  = cut(1:length(devices_all), breaks = 5, labels = F)  
+morn_folds = cut(1:length(devices_morn), breaks = 5, labels = F)  
+even_folds = cut(1:length(devices_even), breaks = 5, labels = F)  
+peak_folds = cut(1:length(devices_peak), breaks = 5, labels = F)  
+
+
+carbon_ind_all$station_id = as.factor(carbon_ind_all$station_id)
+carbon_ind_morn$station_id = as.factor(carbon_ind_morn$station_id)
+carbon_ind_even$station_id = as.factor(carbon_ind_even$station_id)
+carbon_ind_peak$station_id = as.factor(carbon_ind_peak$station_id)
+
+```
+
+```{r bio all}
+
+
+
+gee_model_all_ex = geeglm(biomass ~ total_ent + aci + bi + ndsi,
+                      id = station_id,
+                      data = na.omit(carbon_ind_all),
+                      family = gaussian(link = "identity"),
+                      corstr = "exchangeable",
+                      scale.fix = TRUE)
+
+gee_model_all_ind = geeglm(biomass ~ total_ent + aci + bi + ndsi,
+                      id = station_id,
+                      data = na.omit(carbon_ind_all),
+                      family = gaussian(link = "identity"),
+                      corstr = "independence",
+                      scale.fix = TRUE)
+
+qic_all_ex = geepack::QIC(gee_model_all_ex)
+qic_all_ind = geepack::QIC(gee_model_all_ind)
+summary(gee_model_all_ex)
+summary(gee_model_all_ind)
+qic_all_ex
+qic_all_ind
+```
+
+```{r bio morning}
+
+gee_model_morn_ar1 = geeglm(biomass ~ total_ent + aci + bi + ndsi,
+                      id     = station_id,
+                      data   = na.omit(carbon_ind_morn),
+                      family = gaussian(link = "identity"),
+                      corstr ="ar1",
+                      scale.fix = TRUE)
+
+gee_model_morn_ex = geeglm(biomass ~ total_ent + aci + bi + ndsi,
+                      id = station_id,
+                      data = na.omit(carbon_ind_morn),
+                      family = gaussian(link = "identity"),
+                      corstr = "exchangeable",
+                      scale.fix = TRUE)
+
+gee_model_morn_ind = geeglm(biomass ~ total_ent + aci + bi + ndsi,
+                      id = station_id,
+                      data = na.omit(carbon_ind_morn),
+                      family = gaussian(link = "identity"),
+                      corstr = "independence",
+                      scale.fix = TRUE)
+
+qic_morn_ar1 = geepack::QIC(gee_model_morn_ar1)
+qic_morn_ex = geepack::QIC(gee_model_morn_ex)
+qic_morn_ind = geepack::QIC(gee_model_morn_ind)
+summary(gee_model_morn_ar1)
+summary(gee_model_morn_ex)
+summary(gee_model_morn_ind)
+qic_morn_ar1
+qic_morn_ex
+qic_morn_ind
+```
+
+```{r bio even}
+
+gee_model_even_ar1 = geeglm(biomass ~ total_ent + aci + bi + ndsi,
+                      id     = station_id,
+                      data   = na.omit(carbon_ind_even),
+                      family = gaussian(link = "identity"),
+                      corstr ="ar1",
+                      scale.fix = TRUE)
+
+gee_model_even_ex = geeglm(biomass ~ total_ent + aci + bi + ndsi,
+                      id = station_id,
+                      data = na.omit(carbon_ind_even),
+                      family = gaussian(link = "identity"),
+                      corstr = "exchangeable",
+                      scale.fix = TRUE)
+
+gee_model_even_ind = geeglm(biomass ~ total_ent + aci + bi + ndsi,
+                      id = station_id,
+                      data = na.omit(carbon_ind_even),
+                      family = gaussian(link = "identity"),
+                      corstr = "independence",
+                      scale.fix = TRUE)
+
+qic_even_ar1 = geepack::QIC(gee_model_even_ar1)
+qic_even_ex = geepack::QIC(gee_model_even_ex)
+qic_even_ind = geepack::QIC(gee_model_even_ind)
+summary(gee_model_even_ar1)
+summary(gee_model_even_ex)
+summary(gee_model_even_ind)
+qic_even_ar1
+qic_even_ex
+qic_even_ind
+```
+
+
+```{r bio peak}
+
+gee_model_peak_ar1 = geeglm(biomass ~ total_ent + aci + bi + ndsi,
+                      id     = station_id,
+                      data   = na.omit(carbon_ind_peak),
+                      family = gaussian(link = "identity"),
+                      corstr ="ar1",
+                      scale.fix = TRUE)
+
+gee_model_peak_ex = geeglm(biomass ~ total_ent + aci + bi + ndsi,
+                      id = station_id,
+                      data = na.omit(carbon_ind_peak),
+                      family = gaussian(link = "identity"),
+                      corstr = "exchangeable",
+                      scale.fix = TRUE)
+
+gee_model_peak_ind = geeglm(biomass ~ total_ent + aci + bi + ndsi,
+                      id = station_id,
+                      data = na.omit(carbon_ind_peak),
+                      family = gaussian(link = "identity"),
+                      corstr = "independence",
+                      scale.fix = TRUE)
+
+qic_peak_ar1 = geepack::QIC(gee_model_peak_ar1)
+qic_peak_ex = geepack::QIC(gee_model_peak_ex)
+qic_peak_ind = geepack::QIC(gee_model_peak_ind)
+summary(gee_model_peak_ar1)
+summary(gee_model_peak_ex)
+summary(gee_model_peak_ind)
+qic_peak_ar1
+qic_peak_ex
+qic_peak_ind
+```

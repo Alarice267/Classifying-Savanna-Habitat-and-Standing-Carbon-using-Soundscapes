@@ -1,0 +1,912 @@
+---
+title: "Untitled"
+output: pdf_document
+date: "2024-09-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(geepack)
+library(caret)
+library(dplyr)
+library(reshape)
+library(tidyr)
+
+```
+
+```{r admin}
+all_data     = read.csv("data_combined8.csv")
+evening_data = read.csv("data_evening8.csv")
+morning_data = read.csv("data_morning8.csv")
+peak_data    = read.csv("data_peak8.csv")
+
+
+##normal data
+all_data$treatment = as.factor(all_data$treatment)                ##factor treatment
+all_data$station_id= as.factor(all_data$station_id)
+
+
+morning_data$treatment = as.factor(morning_data$treatment)        ##factor treatment
+morning_data$station_id= as.factor(morning_data$station_id)
+
+evening_data$treatment = as.factor(evening_data$treatment)        ##factor treatment
+evening_data$station_id= as.factor(evening_data$station_id)
+
+
+peak_data$treatment = as.factor(peak_data$treatment)              ##factor treatment
+peak_data$station_id= as.factor(peak_data$station_id)
+
+set.seed(2024)
+cont_all = filter(all_data,treatment=="control")                  ##control data 
+exc_all  = filter(all_data,treatment=="exclusion")                ##exclosure data
+devices_cont_all = sample(unique(cont_all$station_id))            ##control devices
+devices_exc_all  = sample(unique(exc_all$station_id))             ##exclosure devices
+
+cont_morn = filter(morning_data,treatment=="control")
+exc_morn  = filter(morning_data,treatment=="exclusion")
+devices_cont_morn = sample(unique(cont_morn$station_id))
+devices_exc_morn  = sample(unique(exc_morn$station_id))
+
+cont_even = filter(evening_data,treatment=="control")
+exc_even  = filter(evening_data,treatment=="exclusion")
+devices_cont_even = sample(unique(cont_even$station_id))
+devices_exc_even  = sample(unique(exc_even$station_id))
+
+cont_peak = filter(peak_data,treatment=="control")
+exc_peak  = filter(peak_data,treatment=="exclusion")
+devices_cont_peak = sample(unique(cont_peak$station_id))
+devices_exc_peak  = sample(unique(exc_peak$station_id))
+
+all_folds_cont = cut(1:length(devices_cont_all), breaks = 5, labels = F)    ##fold by device
+all_folds_exc  = cut(1:length(devices_exc_all), breaks = 5, labels = F) 
+
+morn_folds_cont = cut(1:length(devices_cont_morn), breaks = 5, labels = F)  
+morn_folds_exc  = cut(1:length(devices_exc_morn), breaks = 5, labels = F)  
+
+even_folds_cont = cut(1:length(devices_cont_even), breaks = 5, labels = F)  
+even_folds_exc  = cut(1:length(devices_exc_even), breaks = 5, labels = F)  
+
+peak_folds_cont = cut(1:length(devices_cont_peak), breaks = 5, labels = F)  
+peak_folds_exc  = cut(1:length(devices_exc_peak), breaks = 5, labels = F)  
+
+
+calculate_auc = function(fpr, tpr){               ##function to calculate AUC
+  sorted_indices = order(fpr)
+  fpr = fpr[sorted_indices]
+  tpr = tpr[sorted_indices]
+    auc = sum((fpr[-1] - fpr[-length(fpr)]) * (tpr[-1] + tpr[-length(tpr)]) / 2)
+  return(auc)
+}
+
+thres = seq(0,1,0.1)        ##threshold 
+```
+
+```{r 5 fold all first threshold}
+set.seed(2024)
+
+TPRt1          = list()
+FPRt1          = list()
+all_gee_MCRt1 = list()
+F12t1          = list()
+for (fld in 1:5){
+  train_devices = c(devices_cont_all[all_folds_cont!= fld],         ##training devices
+                    devices_exc_all[all_folds_exc!= fld])       
+  train = filter(all_data,station_id %in% train_devices)            ##training data          
+  valid = filter(all_data,!station_id %in% train_devices)           ##validation data
+  train[,10:15] = scale(train[,10:15])                              ##scale after split
+  valid[,10:15] = scale(valid[,10:15])
+  
+  gee_model = geeglm(ifelse(treatment=="control",1,0) ~ total_ent + aci + bi + ndsi, ##gee
+                      id     = station_id,
+                      data   = train,
+                      family = binomial("logit"),
+                      corstr ="independence",
+                      scale.fix = TRUE)
+
+  valid_pred = predict(gee_model, valid,type = "response")         ##predict probability
+  all_gee_MCR = c()                                                ##performance
+  TPR = c()
+  FPR = c()
+  TNR = c()
+  PPV = c()
+  NPV = c()
+  F1  = c()
+  for (i in 1:length(thres)){
+  bound_val = ifelse(valid_pred >thres[i],"control","exclusion")   ##observation prediction
+  valid$pred = bound_val ##add predictions
+
+  all_gee_MCR[i]    = mean(valid$pred != valid$treatment)         ##MCR error
+  
+  conf  =  as.matrix(table(Predict=factor(valid$pred,levels =      ##confusion matrix
+                                            c("control","exclusion")),Actual=valid$treatment))
+  TPR[i] = conf[2,2]/(conf[1,2]+conf[2,2])
+  FPR[i] = conf[2,1]/(conf[2,1]+conf[1,1])
+  TNR[i] = conf[1,1]/(conf[1,1]+conf[2,1])
+  PPV[i] = conf[2,2]/(conf[2,2]+conf[2,1])
+  NPV[i] = conf[1,1]/(conf[1,1]+conf[1,2])
+  F1[i]  = 2*(TPR[i]*PPV[i])/(TPR[i]+PPV[i])
+  }
+  TPRt1[[fld]] = TPR
+  FPRt1[[fld]] = FPR
+  F12t1[[fld]]  = F1
+  print(paste0("Fold",fld))
+
+}
+  
+mean_tpr2 = rowMeans(do.call(cbind, TPRt1), na.rm = TRUE) ##mean of performance metrics for each threshold over folds
+mean_fpr2 = rowMeans(do.call(cbind, FPRt1), na.rm = TRUE)
+mean_F12  = rowMeans(do.call(cbind, F12t1), na.rm = TRUE)
+
+plot(mean_fpr2, mean_tpr2, type = "l", col = "blue", lwd = 2, ##ROC plot
+     xlab = "False Positive Rate",
+     ylab = "True Positive Rate",
+     main = "All Dataset")
+abline(a = 0, b = 1, col = "black", lty = 2)
+opt = which.min(sqrt((0 - mean_fpr2)^2+(1 - mean_tpr2)^2))   ##optimal threshold
+#opt = which.min(abs(0 - mean_fpr2)+ abs(1 - mean_tpr2))
+points(mean_tpr2[opt] ~ mean_fpr2[opt], col = 'red', pch = 16)
+text(mean_tpr2[opt] ~ mean_fpr2[opt], labels = thres[opt], pos = 2)
+
+calculate_auc(mean_fpr2, mean_tpr2)
+
+```
+
+```{r 5 fold morning first threshold}
+set.seed(2024)
+
+TPRt1          = list()
+FPRt1          = list()
+morn_gee_MCRt1 = list()
+F12t1          = list()
+for (fld in 1:5){
+  train_devices = c(devices_cont_all[morn_folds_cont!= fld],         ##training devices
+                    devices_exc_all[morn_folds_exc!= fld])       
+  train = filter(morning_data,station_id %in% train_devices)            ##training data          
+  valid = filter(morning_data,!station_id %in% train_devices)           ##validation data
+  train[,10:15] = scale(train[,10:15])                              ##scale after split
+  valid[,10:15] = scale(valid[,10:15])
+  
+  gee_model = geeglm(ifelse(treatment=="control",1,0) ~ total_ent + aci + bi + ndsi, ##gee
+                      id     = station_id,
+                      data   = train,
+                      family = binomial("logit"),
+                      corstr ="independence",
+                      scale.fix = TRUE)
+
+  valid_pred = predict(gee_model, valid,type = "response")         ##predict probability
+  morn_gee_MCR = c()                                                ##performance
+  TPR = c()
+  FPR = c()
+  TNR = c()
+  PPV = c()
+  NPV = c()
+  F1  = c()
+  for (i in 1:length(thres)){
+  bound_val = ifelse(valid_pred >thres[i],"control","exclusion")   ##observation prediction
+  valid$pred = bound_val ##add predictions
+
+  morn_gee_MCR[i]    = mean(valid$pred != valid$treatment)         ##MCR error
+  
+  conf  =  as.matrix(table(Predict=factor(valid$pred,levels =      ##confusion matrix
+                                            c("control","exclusion")),Actual=valid$treatment))
+  TPR[i] = conf[2,2]/(conf[1,2]+conf[2,2])
+  FPR[i] = conf[2,1]/(conf[2,1]+conf[1,1])
+  TNR[i] = conf[1,1]/(conf[1,1]+conf[2,1])
+  PPV[i] = conf[2,2]/(conf[2,2]+conf[2,1])
+  NPV[i] = conf[1,1]/(conf[1,1]+conf[1,2])
+  F1[i]  = 2*(TPR[i]*PPV[i])/(TPR[i]+PPV[i])
+  }
+  TPRt1[[fld]] = TPR
+  FPRt1[[fld]] = FPR
+  F12t1[[fld]]  = F1
+  print(paste0("Fold",fld))
+
+}
+  
+mean_tpr2 = rowMeans(do.call(cbind, TPRt1), na.rm = TRUE) ##mean of performance metrics for each threshold over folds
+mean_fpr2 = rowMeans(do.call(cbind, FPRt1), na.rm = TRUE)
+mean_F12  = rowMeans(do.call(cbind, F12t1), na.rm = TRUE)
+
+plot(mean_fpr2, mean_tpr2, type = "l", col = "blue", lwd = 2, ##ROC plot
+     xlab = "False Positive Rate",
+     ylab = "True Positive Rate",
+     main = "Morning Dataset")
+abline(a = 0, b = 1, col = "black", lty = 2)
+opt = which.min(sqrt((0 - mean_fpr2)^2+(1 - mean_tpr2)^2))   ##optimal threshold
+#opt = which.min(abs(0 - mean_fpr2)+ abs(1 - mean_tpr2))
+points(mean_tpr2[opt] ~ mean_fpr2[opt], col = 'red', pch = 16)
+text(mean_tpr2[opt] ~ mean_fpr2[opt], labels = thres[opt], pos = 2)
+
+calculate_auc(mean_fpr2, mean_tpr2)
+
+```
+
+```{r 5 fold evening first threshold}
+set.seed(2024)
+
+TPRt1          = list()
+FPRt1          = list()
+even_gee_MCRt1 = list()
+F12t1          = list()
+for (fld in 1:5){
+  train_devices = c(devices_cont_all[even_folds_cont!= fld],         ##training devices
+                    devices_exc_all[even_folds_exc!= fld])       
+  train = filter(evening_data,station_id %in% train_devices)            ##training data          
+  valid = filter(evening_data,!station_id %in% train_devices)           ##validation data
+  train[,10:15] = scale(train[,10:15])                              ##scale after split
+  valid[,10:15] = scale(valid[,10:15])
+  
+  gee_model = geeglm(ifelse(treatment=="control",1,0) ~ total_ent + aci + bi + ndsi, ##gee
+                      id     = station_id,
+                      data   = train,
+                      family = binomial("logit"),
+                      corstr ="independence",
+                      scale.fix = TRUE)
+
+  valid_pred = predict(gee_model, valid,type = "response")         ##predict probability
+  even_gee_MCR = c()                                                ##performance
+  TPR = c()
+  FPR = c()
+  TNR = c()
+  PPV = c()
+  NPV = c()
+  F1  = c()
+  for (i in 1:length(thres)){
+  bound_val = ifelse(valid_pred >thres[i],"control","exclusion")   ##observation prediction
+  valid$pred = bound_val ##add predictions
+
+  even_gee_MCR[i]    = mean(valid$pred != valid$treatment)         ##MCR error
+  
+  conf  =  as.matrix(table(Predict=factor(valid$pred,levels =      ##confusion matrix
+                                            c("control","exclusion")),Actual=valid$treatment))
+  TPR[i] = conf[2,2]/(conf[1,2]+conf[2,2])
+  FPR[i] = conf[2,1]/(conf[2,1]+conf[1,1])
+  TNR[i] = conf[1,1]/(conf[1,1]+conf[2,1])
+  PPV[i] = conf[2,2]/(conf[2,2]+conf[2,1])
+  NPV[i] = conf[1,1]/(conf[1,1]+conf[1,2])
+  F1[i]  = 2*(TPR[i]*PPV[i])/(TPR[i]+PPV[i])
+  }
+  TPRt1[[fld]] = TPR
+  FPRt1[[fld]] = FPR
+  F12t1[[fld]]  = F1
+  print(paste0("Fold",fld))
+
+}
+  
+mean_tpr2 = rowMeans(do.call(cbind, TPRt1), na.rm = TRUE) ##mean of performance metrics for each threshold over folds
+mean_fpr2 = rowMeans(do.call(cbind, FPRt1), na.rm = TRUE)
+mean_F12  = rowMeans(do.call(cbind, F12t1), na.rm = TRUE)
+
+plot(mean_fpr2, mean_tpr2, type = "l", col = "blue", lwd = 2, ##ROC plot
+     xlab = "False Positive Rate",
+     ylab = "True Positive Rate",
+     main = "Evening Dataset")
+abline(a = 0, b = 1, col = "black", lty = 2)
+opt = which.min(sqrt((0 - mean_fpr2)^2+(1 - mean_tpr2)^2))   ##optimal threshold
+#opt = which.min(abs(0 - mean_fpr2)+ abs(1 - mean_tpr2))
+points(mean_tpr2[opt] ~ mean_fpr2[opt], col = 'red', pch = 16)
+text(mean_tpr2[opt] ~ mean_fpr2[opt], labels = thres[opt], pos = 2)
+
+calculate_auc(mean_fpr2, mean_tpr2)
+
+```
+
+```{r 5 fold Peak first threshold}
+set.seed(2024)
+
+TPRt1          = list()
+FPRt1          = list()
+peak_gee_MCRt1 = list()
+F12t1          = list()
+for (fld in 1:5){
+  train_devices = c(devices_cont_all[peak_folds_cont!= fld],         ##training devices
+                    devices_exc_all[peak_folds_exc!= fld])       
+  train = filter(peak_data,station_id %in% train_devices)            ##training data          
+  valid = filter(peak_data,!station_id %in% train_devices)           ##validation data
+  train[,10:15] = scale(train[,10:15])                              ##scale after split
+  valid[,10:15] = scale(valid[,10:15])
+  
+  gee_model = geeglm(ifelse(treatment=="control",1,0) ~ total_ent + aci + bi + ndsi, ##gee
+                      id     = station_id,
+                      data   = train,
+                      family = binomial("logit"),
+                      corstr ="independence",
+                      scale.fix = TRUE)
+
+  valid_pred = predict(gee_model, valid,type = "response")         ##predict probability
+  peak_gee_MCR = c()                                                ##performance
+  TPR = c()
+  FPR = c()
+  TNR = c()
+  PPV = c()
+  NPV = c()
+  F1  = c()
+  for (i in 1:length(thres)){
+  bound_val = ifelse(valid_pred >thres[i],"control","exclusion")   ##observation prediction
+  valid$pred = bound_val ##add predictions
+
+  peak_gee_MCR[i]    = mean(valid$pred != valid$treatment)         ##MCR error
+  
+  conf  =  as.matrix(table(Predict=factor(valid$pred,levels =      ##confusion matrix
+                                            c("control","exclusion")),Actual=valid$treatment))
+  TPR[i] = conf[2,2]/(conf[1,2]+conf[2,2])
+  FPR[i] = conf[2,1]/(conf[2,1]+conf[1,1])
+  TNR[i] = conf[1,1]/(conf[1,1]+conf[2,1])
+  PPV[i] = conf[2,2]/(conf[2,2]+conf[2,1])
+  NPV[i] = conf[1,1]/(conf[1,1]+conf[1,2])
+  F1[i]  = 2*(TPR[i]*PPV[i])/(TPR[i]+PPV[i])
+  }
+  TPRt1[[fld]] = TPR
+  FPRt1[[fld]] = FPR
+  F12t1[[fld]]  = F1
+  print(paste0("Fold",fld))
+
+}
+  
+mean_tpr2 = rowMeans(do.call(cbind, TPRt1), na.rm = TRUE) ##mean of performance metrics for each threshold over folds
+mean_fpr2 = rowMeans(do.call(cbind, FPRt1), na.rm = TRUE)
+mean_F12  = rowMeans(do.call(cbind, F12t1), na.rm = TRUE)
+
+plot(mean_fpr2, mean_tpr2, type = "l", col = "blue", lwd = 2, ##ROC plot
+     xlab = "False Positive Rate",
+     ylab = "True Positive Rate",
+     main = "Peak Dataset")
+abline(a = 0, b = 1, col = "black", lty = 2)
+opt = which.min(sqrt((0 - mean_fpr2)^2+(1 - mean_tpr2)^2))   ##optimal threshold
+#opt = which.min(abs(0 - mean_fpr2)+ abs(1 - mean_tpr2))
+points(mean_tpr2[opt] ~ mean_fpr2[opt], col = 'red', pch = 16)
+text(mean_tpr2[opt] ~ mean_fpr2[opt], labels = thres[opt], pos = 2)
+
+calculate_auc(mean_fpr2, mean_tpr2)
+
+```
+
+```{r 5 fold all second threshold}
+
+all_gee_MCR = c()   ##observation performance metrics
+TPR = c()
+TNR = c()
+PPV = c()
+NPV = c()
+F1  = c()
+all_gee_MCR2t = list()  ##device performance metric for all  thresholds
+TPRt = list()
+FPRt = list()
+TNRt = list()
+PPVt = list()
+NPVt = list()
+F1t  = list()
+
+for (fld in 1:5){
+  train_devices = c(devices_cont_all[all_folds_cont!= fld],     ##training devices
+                    devices_exc_all[all_folds_exc!= fld])
+  train = filter(all_data,station_id %in% train_devices)      ##training data                  
+  valid = filter(all_data,!station_id %in% train_devices)     ##validation data
+  train[,10:15] = scale(train[,10:15])                            ##scale aftersplit
+  valid[,10:15] = scale(valid[,10:15])
+  
+  gee_model = geeglm(ifelse(treatment=="control",1,0) ~ total_ent + aci + bi + ndsi, ##gee
+                      id     = station_id,
+                      data   = train,
+                      family = binomial("logit"),
+                      corstr ="independence",
+                      scale.fix = TRUE)
+
+  valid_pred = predict(gee_model, valid,type = "response")        ##predict probability
+ 
+  bound_val = ifelse(valid_pred > 0.77,"control","exclusion")      ##predict class
+  valid$pred = bound_val ##add predictions
+
+  all_gee_MCR[fld]    = mean(valid$pred != valid$treatment)          ##MCR error
+  
+  conf  =  as.matrix(table(Predict=factor(valid$pred,levels =      ##conf
+                                            c("control","exclusion")),Actual=valid$treatment))
+  TPR[fld] = conf[2,2]/(conf[1,2]+conf[2,2])
+  FPR[fld] = conf[2,1]/(conf[2,1]+conf[1,1])
+  TNR[fld] = conf[1,1]/(conf[1,1]+conf[2,1])
+  PPV[fld] = conf[2,2]/(conf[2,2]+conf[2,1])
+  NPV[fld] = conf[1,1]/(conf[1,1]+conf[1,2])
+  F1[fld]  = 2*(TPR[fld]*PPV[fld])/(TPR[fld]+PPV[fld])
+  
+  count = Filter(Negate(is.null),(tapply(factor(valid$pred,levels = c("control","exclusion")),
+                                         INDEX = valid$station_id,FUN=table))) #count predictions for each device
+
+  count            = as.data.frame(do.call(rbind, count))    ##data frame
+  count$percexc    = count$exclusion/(count$control+count$exclusion)##percentage of exclosure
+  TPR2 = c()       ##performance metrics by device per threshold
+  FPR2 = c()
+  TNR2 = c()
+  PPV2 = c()
+  NPV2 = c()
+  F12  = c()
+  all_gee_MCR2 = c()
+   for (i in 1:length(thres)){
+  count$Prediction = ifelse(count$percexc > thres[i], "exclusion", "control") ##majority prediction
+
+  valid_dim    = unique(select(valid,c("treatment","station_id"))) ##actual stations with their treatment
+  count$actual = valid_dim$treatment ##assign actual
+  all_gee_MCR2[i]     = mean(count$Prediction != count$actual)
+  
+  conf2     =  as.matrix(table(Predicted = factor(count$Prediction,levels=c("control","exclusion")),
+                               Actual = factor(count$actual)))
+  
+  TPR2[i] = conf2[2,2]/(conf2[1,2]+conf2[2,2])            ##performance metrics by device
+  FPR2[i] = conf2[2,1]/(conf2[2,1]+conf2[1,1])
+  TNR2[i] = conf2[1,1]/(conf2[1,1]+conf2[2,1])
+  PPV2[i] = conf2[2,2]/(conf2[2,2]+conf2[2,1])
+  NPV2[i] = conf2[1,1]/(conf2[1,1]+conf2[1,2])
+  F12[i]  = 2*(TPR2[i]* PPV2[i])/(TPR2[i]+PPV2[i])
+   }
+  
+  all_gee_MCR2t[[fld]] = all_gee_MCR2 ##performance metrics by device per threshold
+  TPRt[[fld]] = TPR2
+  FPRt[[fld]] = FPR2
+  TNRt[[fld]] = TNR2
+  PPVt[[fld]] = PPV2
+  NPVt[[fld]] = NPV2
+  F1t[[fld]]  = F12
+  print(paste0("Fold",fld))
+}
+
+
+mean_tpr2 = rowMeans(do.call(cbind, TPRt), na.rm = TRUE)##mean of performance metrics for each threshold over folds
+mean_fpr2 = rowMeans(do.call(cbind, FPRt), na.rm = TRUE)
+mean_tnr2 = rowMeans(do.call(cbind, TNRt), na.rm = TRUE)
+mean_maj  = rowMeans(do.call(cbind, all_gee_MCR2t), na.rm = TRUE)
+mean_F12  = rowMeans(do.call(cbind, F1t), na.rm = TRUE)
+
+sd_maj  = apply(do.call(cbind, all_gee_MCR2t), 1, sd, na.rm = TRUE)##sd of performance metrics for each threshold over
+sd_tpr2 = apply(do.call(cbind, TPRt), 1, sd, na.rm = TRUE)
+sd_F12  = apply(do.call(cbind, F1t), 1, sd, na.rm = TRUE)
+
+plot(mean_fpr2, mean_tpr2, type = "l", col = "blue", lwd = 2,  ##ROC plot
+     xlab = "False Positive Rate",
+     ylab = "True Positive Rate",
+     main = "All Dataset")
+abline(a = 0, b = 1, col = "black", lty = 2)
+opt = which.min(sqrt((0 - mean_fpr2)^2+(1 - mean_tpr2)^2))     ##optimal threshold
+#opt = which.min(abs(0 - mean_fpr2)+ abs(1 - mean_tpr2))
+points(mean_tpr2[opt] ~ mean_fpr2[opt], col = 'red', pch = 16)
+text(mean_tpr2[opt] ~ mean_fpr2[opt], labels = thres[opt], pos = 2)
+
+
+mean_tpr = mean(TPR)         ##observation performance metric means and sd
+mean_mcr = mean(all_gee_MCR)
+mean_F1  = mean(F1)
+sd_tpr = sd(TPR)
+sd_mcr = sd(all_MCR)
+sd_F1  = sd(F1) 
+mean_maj[opt] ##device performance metric means and sd for optimal threshold
+sd_maj[opt]
+mean_tpr2[opt]
+sd_tpr2[opt]
+mean_F12[opt]
+sd_F12[opt]
+
+calculate_auc(mean_fpr2, mean_tpr2)
+
+```
+
+```{r 5 fold Morning second threshold}
+
+morn_gee_MCR = c()   ##observation performance metrics
+TPR = c()
+TNR = c()
+PPV = c()
+NPV = c()
+F1  = c()
+morn_gee_MCR2t = list()  ##device performance metric for all  thresholds
+TPRt = list()
+FPRt = list()
+TNRt = list()
+PPVt = list()
+NPVt = list()
+F1t  = list()
+
+for (fld in 1:5){
+  train_devices = c(devices_cont_morn[morn_folds_cont!= fld],     ##training devices
+                    devices_exc_morn[morn_folds_exc!= fld])
+  train = filter(morning_data,station_id %in% train_devices)      ##training data                  
+  valid = filter(morning_data,!station_id %in% train_devices)     ##validation data
+  train[,10:15] = scale(train[,10:15])                            ##scale aftersplit
+  valid[,10:15] = scale(valid[,10:15])
+  
+  gee_model = geeglm(ifelse(treatment=="control",1,0) ~ total_ent + aci + bi + ndsi, ##gee
+                      id     = station_id,
+                      data   = train,
+                      family = binomial("logit"),
+                      corstr ="independence",
+                      scale.fix = TRUE)
+
+  valid_pred = predict(gee_model, valid,type = "response")        ##predict probability
+ 
+  bound_val = ifelse(valid_pred > 0.76,"control","exclusion")      ##predict class
+  valid$pred = bound_val ##add predictions
+
+  morn_gee_MCR[fld]    = mean(valid$pred != valid$treatment)          ##MCR error
+  
+  conf  =  as.matrix(table(Predict=factor(valid$pred,levels =      ##conf
+                                            c("control","exclusion")),Actual=valid$treatment))
+  TPR[fld] = conf[2,2]/(conf[1,2]+conf[2,2])
+  FPR[fld] = conf[2,1]/(conf[2,1]+conf[1,1])
+  TNR[fld] = conf[1,1]/(conf[1,1]+conf[2,1])
+  PPV[fld] = conf[2,2]/(conf[2,2]+conf[2,1])
+  NPV[fld] = conf[1,1]/(conf[1,1]+conf[1,2])
+  F1[fld]  = 2*(TPR[fld]*PPV[fld])/(TPR[fld]+PPV[fld])
+  
+  count = Filter(Negate(is.null),(tapply(factor(valid$pred,levels = c("control","exclusion")),
+                                         INDEX = valid$station_id,FUN=table))) #count predictions for each device
+
+  count            = as.data.frame(do.call(rbind, count))    ##data frame
+  count$percexc    = count$exclusion/(count$control+count$exclusion)##percentage of exclosure
+  TPR2 = c()       ##performance metrics by device per threshold
+  FPR2 = c()
+  TNR2 = c()
+  PPV2 = c()
+  NPV2 = c()
+  F12  = c()
+  morn_gee_MCR2 = c()
+   for (i in 1:length(thres)){
+  count$Prediction = ifelse(count$percexc > thres[i], "exclusion", "control") ##majority prediction
+
+  valid_dim    = unique(select(valid,c("treatment","station_id"))) ##actual stations with their treatment
+  count$actual = valid_dim$treatment ##assign actual
+  morn_gee_MCR2[i]     = mean(count$Prediction != count$actual)
+  
+  conf2     =  as.matrix(table(Predicted = factor(count$Prediction,levels=c("control","exclusion")),
+                               Actual = factor(count$actual)))
+  
+  TPR2[i] = conf2[2,2]/(conf2[1,2]+conf2[2,2])            ##performance metrics by device
+  FPR2[i] = conf2[2,1]/(conf2[2,1]+conf2[1,1])
+  TNR2[i] = conf2[1,1]/(conf2[1,1]+conf2[2,1])
+  PPV2[i] = conf2[2,2]/(conf2[2,2]+conf2[2,1])
+  NPV2[i] = conf2[1,1]/(conf2[1,1]+conf2[1,2])
+  F12[i]  = 2*(TPR2[i]* PPV2[i])/(TPR2[i]+PPV2[i])
+   }
+  
+  morn_gee_MCR2t[[fld]] = morn_gee_MCR2 ##performance metrics by device per threshold
+  TPRt[[fld]] = TPR2
+  FPRt[[fld]] = FPR2
+  TNRt[[fld]] = TNR2
+  PPVt[[fld]] = PPV2
+  NPVt[[fld]] = NPV2
+  F1t[[fld]]  = F12
+  print(paste0("Fold",fld))
+}
+
+
+mean_tpr2 = rowMeans(do.call(cbind, TPRt), na.rm = TRUE)##mean of performance metrics for each threshold over folds
+mean_fpr2 = rowMeans(do.call(cbind, FPRt), na.rm = TRUE)
+mean_tnr2 = rowMeans(do.call(cbind, TNRt), na.rm = TRUE)
+mean_maj  = rowMeans(do.call(cbind, morn_gee_MCR2t), na.rm = TRUE)
+mean_F12  = rowMeans(do.call(cbind, F1t), na.rm = TRUE)
+
+sd_maj  = apply(do.call(cbind, morn_gee_MCR2t), 1, sd, na.rm = TRUE)##sd of performance metrics for each threshold over
+sd_tpr2 = apply(do.call(cbind, TPRt), 1, sd, na.rm = TRUE)
+sd_F12  = apply(do.call(cbind, F1t), 1, sd, na.rm = TRUE)
+
+plot(mean_fpr2, mean_tpr2, type = "l", col = "blue", lwd = 2,  ##ROC plot
+     xlab = "False Positive Rate",
+     ylab = "True Positive Rate",
+     main = "Morning Dataset")
+abline(a = 0, b = 1, col = "black", lty = 2)
+opt = which.min(sqrt((0 - mean_fpr2)^2+(1 - mean_tpr2)^2))     ##optimal threshold
+#opt = which.min(abs(0 - mean_fpr2)+ abs(1 - mean_tpr2))
+points(mean_tpr2[opt] ~ mean_fpr2[opt], col = 'red', pch = 16)
+text(mean_tpr2[opt] ~ mean_fpr2[opt], labels = thres[opt], pos = 2)
+
+
+mean_tpr = mean(TPR)         ##observation performance metric means and sd
+mean_mcr = mean(morn_gee_MCR)
+mean_F1  = mean(F1)
+sd_tpr = sd(TPR)
+sd_mcr = sd(all_MCR)
+sd_F1  = sd(F1) 
+mean_maj[opt] ##device performance metric means and sd for optimal threshold
+sd_maj[opt]
+mean_tpr2[opt]
+sd_tpr2[opt]
+mean_F12[opt]
+sd_F12[opt]
+
+calculate_auc(mean_fpr2, mean_tpr2)
+
+```
+
+```{r 5 fold evening second threshold}
+
+even_gee_MCR = c()   ##observation performance metrics
+TPR = c()
+TNR = c()
+PPV = c()
+NPV = c()
+F1  = c()
+even_gee_MCR2t = list()  ##device performance metric for all  thresholds
+TPRt = list()
+FPRt = list()
+TNRt = list()
+PPVt = list()
+NPVt = list()
+F1t  = list()
+
+for (fld in 1:5){
+  train_devices = c(devices_cont_even[even_folds_cont!= fld],     ##training devices
+                    devices_exc_even[even_folds_exc!= fld])
+  train = filter(evening_data,station_id %in% train_devices)      ##training data                  
+  valid = filter(evening_data,!station_id %in% train_devices)     ##validation data
+  train[,10:15] = scale(train[,10:15])                            ##scale aftersplit
+  valid[,10:15] = scale(valid[,10:15])
+  
+  gee_model = geeglm(ifelse(treatment=="control",1,0) ~ total_ent + aci + bi + ndsi, ##gee
+                      id     = station_id,
+                      data   = train,
+                      family = binomial("logit"),
+                      corstr ="independence",
+                      scale.fix = TRUE)
+
+  valid_pred = predict(gee_model, valid,type = "response")        ##predict probability
+ 
+  bound_val = ifelse(valid_pred > 0.78,"control","exclusion")      ##predict class
+  valid$pred = bound_val ##add predictions
+
+  even_gee_MCR[fld]    = mean(valid$pred != valid$treatment)          ##MCR error
+  
+  conf  =  as.matrix(table(Predict=factor(valid$pred,levels =      ##conf
+                                            c("control","exclusion")),Actual=valid$treatment))
+  TPR[fld] = conf[2,2]/(conf[1,2]+conf[2,2])
+  FPR[fld] = conf[2,1]/(conf[2,1]+conf[1,1])
+  TNR[fld] = conf[1,1]/(conf[1,1]+conf[2,1])
+  PPV[fld] = conf[2,2]/(conf[2,2]+conf[2,1])
+  NPV[fld] = conf[1,1]/(conf[1,1]+conf[1,2])
+  F1[fld]  = 2*(TPR[fld]*PPV[fld])/(TPR[fld]+PPV[fld])
+  
+  count = Filter(Negate(is.null),(tapply(factor(valid$pred,levels = c("control","exclusion")),
+                                         INDEX = valid$station_id,FUN=table))) #count predictions for each device
+
+  count            = as.data.frame(do.call(rbind, count))    ##data frame
+  count$percexc    = count$exclusion/(count$control+count$exclusion)##percentage of exclosure
+  TPR2 = c()       ##performance metrics by device per threshold
+  FPR2 = c()
+  TNR2 = c()
+  PPV2 = c()
+  NPV2 = c()
+  F12  = c()
+  even_gee_MCR2 = c()
+   for (i in 1:length(thres)){
+  count$Prediction = ifelse(count$percexc > thres[i], "exclusion", "control") ##majority prediction
+
+  valid_dim    = unique(select(valid,c("treatment","station_id"))) ##actual stations with their treatment
+  count$actual = valid_dim$treatment ##assign actual
+  even_gee_MCR2[i]     = mean(count$Prediction != count$actual)
+  
+  conf2     =  as.matrix(table(Predicted = factor(count$Prediction,levels=c("control","exclusion")),
+                               Actual = factor(count$actual)))
+  
+  TPR2[i] = conf2[2,2]/(conf2[1,2]+conf2[2,2])            ##performance metrics by device
+  FPR2[i] = conf2[2,1]/(conf2[2,1]+conf2[1,1])
+  TNR2[i] = conf2[1,1]/(conf2[1,1]+conf2[2,1])
+  PPV2[i] = conf2[2,2]/(conf2[2,2]+conf2[2,1])
+  NPV2[i] = conf2[1,1]/(conf2[1,1]+conf2[1,2])
+  F12[i]  = 2*(TPR2[i]* PPV2[i])/(TPR2[i]+PPV2[i])
+   }
+  
+  even_gee_MCR2t[[fld]] = even_gee_MCR2 ##performance metrics by device per threshold
+  TPRt[[fld]] = TPR2
+  FPRt[[fld]] = FPR2
+  TNRt[[fld]] = TNR2
+  PPVt[[fld]] = PPV2
+  NPVt[[fld]] = NPV2
+  F1t[[fld]]  = F12
+  print(paste0("Fold",fld))
+}
+
+
+mean_tpr2 = rowMeans(do.call(cbind, TPRt), na.rm = TRUE)##mean of performance metrics for each threshold over folds
+mean_fpr2 = rowMeans(do.call(cbind, FPRt), na.rm = TRUE)
+mean_tnr2 = rowMeans(do.call(cbind, TNRt), na.rm = TRUE)
+mean_maj  = rowMeans(do.call(cbind, even_gee_MCR2t), na.rm = TRUE)
+mean_F12  = rowMeans(do.call(cbind, F1t), na.rm = TRUE)
+
+sd_maj  = apply(do.call(cbind, even_gee_MCR2t), 1, sd, na.rm = TRUE)##sd of performance metrics for each threshold over
+sd_tpr2 = apply(do.call(cbind, TPRt), 1, sd, na.rm = TRUE)
+sd_F12  = apply(do.call(cbind, F1t), 1, sd, na.rm = TRUE)
+
+plot(mean_fpr2, mean_tpr2, type = "l", col = "blue", lwd = 2,  ##ROC plot
+     xlab = "False Positive Rate",
+     ylab = "True Positive Rate",
+     main = "Evening Dataset")
+abline(a = 0, b = 1, col = "black", lty = 2)
+opt = which.min(sqrt((0 - mean_fpr2)^2+(1 - mean_tpr2)^2))     ##optimal threshold
+#opt = which.min(abs(0 - mean_fpr2)+ abs(1 - mean_tpr2))
+points(mean_tpr2[opt] ~ mean_fpr2[opt], col = 'red', pch = 16)
+text(mean_tpr2[opt] ~ mean_fpr2[opt], labels = thres[opt], pos = 2)
+
+
+mean_tpr = mean(TPR)         ##observation performance metric means and sd
+mean_mcr = mean(even_gee_MCR)
+mean_F1  = mean(F1)
+sd_tpr = sd(TPR)
+sd_mcr = sd(all_MCR)
+sd_F1  = sd(F1) 
+mean_maj[opt] ##device performance metric means and sd for optimal threshold
+sd_maj[opt]
+mean_tpr2[opt]
+sd_tpr2[opt]
+mean_F12[opt]
+sd_F12[opt]
+
+calculate_auc(mean_fpr2, mean_tpr2)
+
+```
+
+```{r 5 fold Peak second threshold}
+
+peak_gee_MCR = c()   ##observation performance metrics
+TPR = c()
+TNR = c()
+PPV = c()
+NPV = c()
+F1  = c()
+peak_gee_MCR2t = list()  ##device performance metric for all  thresholds
+TPRt = list()
+FPRt = list()
+TNRt = list()
+PPVt = list()
+NPVt = list()
+F1t  = list()
+
+for (fld in 1:5){
+  train_devices = c(devices_cont_peak[peak_folds_cont!= fld],     ##training devices
+                    devices_exc_peak[peak_folds_exc!= fld])
+  train = filter(peak_data,station_id %in% train_devices)      ##training data                  
+  valid = filter(peak_data,!station_id %in% train_devices)     ##validation data
+  train[,10:15] = scale(train[,10:15])                            ##scale aftersplit
+  valid[,10:15] = scale(valid[,10:15])
+  
+  gee_model = geeglm(ifelse(treatment=="control",1,0) ~ total_ent + aci + bi + ndsi, ##gee
+                      id     = station_id,
+                      data   = train,
+                      family = binomial("logit"),
+                      corstr ="independence",
+                      scale.fix = TRUE)
+
+  valid_pred = predict(gee_model, valid,type = "response")        ##predict probability
+ 
+  bound_val = ifelse(valid_pred > 0.75,"control","exclusion")      ##predict class
+  valid$pred = bound_val ##add predictions
+
+  peak_gee_MCR[fld]    = mean(valid$pred != valid$treatment)          ##MCR error
+  
+  conf  =  as.matrix(table(Predict=factor(valid$pred,levels =      ##conf
+                                            c("control","exclusion")),Actual=valid$treatment))
+  TPR[fld] = conf[2,2]/(conf[1,2]+conf[2,2])
+  FPR[fld] = conf[2,1]/(conf[2,1]+conf[1,1])
+  TNR[fld] = conf[1,1]/(conf[1,1]+conf[2,1])
+  PPV[fld] = conf[2,2]/(conf[2,2]+conf[2,1])
+  NPV[fld] = conf[1,1]/(conf[1,1]+conf[1,2])
+  F1[fld]  = 2*(TPR[fld]*PPV[fld])/(TPR[fld]+PPV[fld])
+  
+  count = Filter(Negate(is.null),(tapply(factor(valid$pred,levels = c("control","exclusion")),
+                                         INDEX = valid$station_id,FUN=table))) #count predictions for each device
+
+  count            = as.data.frame(do.call(rbind, count))    ##data frame
+  count$percexc    = count$exclusion/(count$control+count$exclusion)##percentage of exclosure
+  TPR2 = c()       ##performance metrics by device per threshold
+  FPR2 = c()
+  TNR2 = c()
+  PPV2 = c()
+  NPV2 = c()
+  F12  = c()
+  peak_gee_MCR2 = c()
+   for (i in 1:length(thres)){
+  count$Prediction = ifelse(count$percexc > thres[i], "exclusion", "control") ##majority prediction
+
+  valid_dim    = unique(select(valid,c("treatment","station_id"))) ##actual stations with their treatment
+  count$actual = valid_dim$treatment ##assign actual
+  peak_gee_MCR2[i]     = mean(count$Prediction != count$actual)
+  
+  conf2     =  as.matrix(table(Predicted = factor(count$Prediction,levels=c("control","exclusion")),
+                               Actual = factor(count$actual)))
+  
+  TPR2[i] = conf2[2,2]/(conf2[1,2]+conf2[2,2])            ##performance metrics by device
+  FPR2[i] = conf2[2,1]/(conf2[2,1]+conf2[1,1])
+  TNR2[i] = conf2[1,1]/(conf2[1,1]+conf2[2,1])
+  PPV2[i] = conf2[2,2]/(conf2[2,2]+conf2[2,1])
+  NPV2[i] = conf2[1,1]/(conf2[1,1]+conf2[1,2])
+  F12[i]  = 2*(TPR2[i]* PPV2[i])/(TPR2[i]+PPV2[i])
+   }
+  
+  peak_gee_MCR2t[[fld]] = peak_gee_MCR2 ##performance metrics by device per threshold
+  TPRt[[fld]] = TPR2
+  FPRt[[fld]] = FPR2
+  TNRt[[fld]] = TNR2
+  PPVt[[fld]] = PPV2
+  NPVt[[fld]] = NPV2
+  F1t[[fld]]  = F12
+  print(paste0("Fold",fld))
+}
+
+
+mean_tpr2 = rowMeans(do.call(cbind, TPRt), na.rm = TRUE)##mean of performance metrics for each threshold over folds
+mean_fpr2 = rowMeans(do.call(cbind, FPRt), na.rm = TRUE)
+mean_tnr2 = rowMeans(do.call(cbind, TNRt), na.rm = TRUE)
+mean_maj  = rowMeans(do.call(cbind, peak_gee_MCR2t), na.rm = TRUE)
+mean_F12  = rowMeans(do.call(cbind, F1t), na.rm = TRUE)
+
+sd_maj  = apply(do.call(cbind, peak_gee_MCR2t), 1, sd, na.rm = TRUE)##sd of performance metrics for each threshold over
+sd_tpr2 = apply(do.call(cbind, TPRt), 1, sd, na.rm = TRUE)
+sd_F12  = apply(do.call(cbind, F1t), 1, sd, na.rm = TRUE)
+
+plot(mean_fpr2, mean_tpr2, type = "l", col = "blue", lwd = 2,  ##ROC plot
+     xlab = "False Positive Rate",
+     ylab = "True Positive Rate",
+     main = "Peak Dataset")
+abline(a = 0, b = 1, col = "black", lty = 2)
+opt = which.min(sqrt((0 - mean_fpr2)^2+(1 - mean_tpr2)^2))     ##optimal threshold
+#opt = which.min(abs(0 - mean_fpr2)+ abs(1 - mean_tpr2))
+points(mean_tpr2[opt] ~ mean_fpr2[opt], col = 'red', pch = 16)
+text(mean_tpr2[opt] ~ mean_fpr2[opt], labels = thres[opt], pos = 2)
+
+
+mean_tpr = mean(TPR)         ##observation performance metric means and sd
+mean_mcr = mean(peak_gee_MCR)
+mean_F1  = mean(F1)
+sd_tpr = sd(TPR)
+sd_mcr = sd(all_MCR)
+sd_F1  = sd(F1) 
+mean_maj[opt] ##device performance metric means and sd for optimal threshold
+sd_maj[opt]
+mean_tpr2[opt]
+sd_tpr2[opt]
+mean_F12[opt]
+sd_F12[opt]
+
+calculate_auc(mean_fpr2, mean_tpr2)
+
+```
+
+
+
+
+```{r full model}
+all_scaled =  all_data                                        ##scale data
+all_scaled[,10:15] = scale(all_scaled[,10:15])
+all_model = geeglm(ifelse(treatment=="control",1,0) ~ total_ent + aci + bi + ndsi,
+                      id     = station_id,
+                      data   = all_scaled,
+                      family = binomial("logit"),
+                      corstr ="independence",
+                      scale.fix = TRUE)
+
+morn_scaled =  morning_data
+morn_scaled[,10:15] = scale(morn_scaled[,10:15])
+morn_model = geeglm(ifelse(treatment=="control",1,0) ~ total_ent + aci + bi + ndsi,
+                      id     = station_id,
+                      data   = morn_scaled,
+                      family = binomial("logit"),
+                      corstr ="independence",
+                      scale.fix = TRUE)
+
+even_scaled =  evening_data
+even_scaled[,10:15] = scale(even_scaled[,10:15])
+even_model = geeglm(ifelse(treatment=="control",1,0) ~ total_ent + aci + bi + ndsi,
+                      id     = station_id,
+                      data   = even_scaled,
+                      family = binomial("logit"),
+                      corstr ="independence",
+                      scale.fix = TRUE)
+
+peak_scaled =  peak_data
+peak_scaled[,10:15] = scale(peak_scaled[,10:15])
+peak_model = geeglm(ifelse(treatment=="control",1,0) ~ total_ent + aci + bi + ndsi,
+                      id     = station_id,
+                      data   = peak_scaled,
+                      family = binomial("logit"),
+                      corstr ="independence",
+                      scale.fix = TRUE)
+
+summary(all_model)
+summary(morn_model)
+summary(even_model)
+summary(peak_model)
+```
